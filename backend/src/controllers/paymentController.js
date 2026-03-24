@@ -61,7 +61,9 @@ async function send(req, res, next) {
       }
     });
   } catch (err) {
-    // Log failed transaction
+    if (err.status === 400 || err.status === 500) {
+      return res.status(err.status).json({ error: err.message });
+    }
     if (err.response?.data) {
       const extras = err.response.data?.extras;
       return res.status(400).json({ error: 'Transaction failed', details: extras });
