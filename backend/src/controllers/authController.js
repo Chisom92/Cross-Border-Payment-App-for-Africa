@@ -4,6 +4,7 @@ const jwt = require('jsonwebtoken');
 const { v4: uuidv4 } = require('uuid');
 const db = require('../db');
 const { createWallet } = require('../services/stellar');
+const { hashPIN, comparePIN, validatePIN } = require('../services/pin');
 const { sendVerificationEmail } = require('../services/email');
 
 const TOKEN_TTL_MS = 96 * 60 * 60 * 1000; // 96 hours
@@ -122,17 +123,84 @@ async function verifyEmail(req, res, next) {
 async function getMe(req, res, next) {
   try {
     const result = await db.query(
-      `SELECT u.id, u.full_name, u.email, u.phone, w.public_key
+      `SELECT u.id, u.full_name, u.email, u.phone, u.pin_setup_completed, w.public_key
        FROM users u LEFT JOIN wallets w ON w.user_id = u.id
        WHERE u.id = $1`,
       [req.user.userId]
     );
     if (!result.rows[0]) return res.status(404).json({ error: 'User not found' });
     const u = result.rows[0];
-    res.json({ id: u.id, full_name: u.full_name, email: u.email, phone: u.phone, wallet_address: u.public_key });
+    res.json({
+      id: u.id,
+      full_name: u.full_name,
+      email: u.email,
+      phone: u.phone,
+      wallet_address: u.public_key,
+      pin_setup_completed: u.pin_setup_completed
+    });
   } catch (err) {
     next(err);
   }
 }
 
+async function setPIN(req, res, next) {
+  try {
+    const { pin } = req.body;
+    const userId = req.user.userId;
+
+    // Validate PIN format
+    if (!validatePIN(pin)) {
+      return res.status(400).json({ error: 'PIN must be 4-6 digits' });
+    }
+
+    // Hash the PIN
+    const pinHash = await hashPIN(pin);
+
+    // Update user's PIN hash and mark PIN setup as completed
+    await db.query(
+      `UPDATE users SET pin_hash = $1, pin_setup_completed = true WHERE id = $2`,
+      [pinHash, userId]
+    );
+
+    res.json({ message: 'PIN set successfully' });
+  } catch (err) {
+    next(err);
+  }
+}
+
+async function verifyPIN(req, res, next) {
+  try {
+    const { pin } = req.body;
+    const userId = req.user.userId;
+
+    // Retrieve user's PIN hash
+    const result = await db.query(
+      `SELECT pin_hash FROM users WHERE id = $1`,
+      [userId]
+    );
+
+    if (!result.rows[0]) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    const { pin_hash } = result.rows[0];
+
+    // Check if PIN is set
+    if (!pin_hash) {
+      return res.status(400).json({ error: 'PIN not configured. Please set up a PIN first.' });
+    }
+
+    // Verify PIN
+    const isPINValid = await comparePIN(pin, pin_hash);
+    if (!isPINValid) {
+      return res.status(401).json({ error: 'Invalid PIN' });
+    }
+
+    res.json({ message: 'PIN verified successfully' });
+  } catch (err) {
+    next(err);
+  }
+}
+
+module.exports = { register, login, getMe, setPIN, verifyPIN };
 module.exports = { register, login, verifyEmail, getMe };

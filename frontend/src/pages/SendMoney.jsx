@@ -6,6 +6,7 @@ import { CURRENCIES, convertFromXLM } from '../utils/currency';
 import toast from 'react-hot-toast';
 import { useTranslation } from 'react-i18next';
 import QRScanner from '../components/QRScanner';
+import PINVerificationModal from '../components/PINVerificationModal';
 
 export default function SendMoney() {
   const navigate = useNavigate();
@@ -14,6 +15,7 @@ export default function SendMoney() {
   const [contacts, setContacts] = useState([]);
   const [showContacts, setShowContacts] = useState(false);
   const [showScanner, setShowScanner] = useState(false);
+  const [showPINVerification, setShowPINVerification] = useState(false);
   const [loading, setLoading] = useState(false);
   const [confirmed, setConfirmed] = useState(false);
 
@@ -28,6 +30,11 @@ export default function SendMoney() {
   const handleSubmit = async (e) => {
     e.preventDefault();
     if (!confirmed) { setConfirmed(true); return; }
+    // Show PIN verification modal instead of directly submitting
+    setShowPINVerification(true);
+  };
+
+  const handlePINVerified = async () => {
     setLoading(true);
     try {
       await api.post('/payments/send', {
@@ -41,6 +48,7 @@ export default function SendMoney() {
     } catch (err) {
       toast.error(err.response?.data?.error || t('send.error'));
       setConfirmed(false);
+      setShowPINVerification(false);
     } finally {
       setLoading(false);
     }
@@ -185,6 +193,15 @@ export default function SendMoney() {
         isOpen={showScanner}
         onClose={() => setShowScanner(false)}
         onScan={(address) => setForm({ ...form, recipient_address: address })}
+      />
+
+      {/* PIN Verification Modal */}
+      <PINVerificationModal
+        isOpen={showPINVerification}
+        onClose={() => setShowPINVerification(false)}
+        onSuccess={handlePINVerified}
+        amount={`${form.amount} ${form.asset}`}
+        recipient={form.recipient_address}
       />
     </div>
   );
