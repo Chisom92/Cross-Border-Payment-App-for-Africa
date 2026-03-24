@@ -112,6 +112,10 @@ async function send(req, res, next) {
 
 async function history(req, res, next) {
   try {
+    const page = Math.max(1, parseInt(req.query.page) || 1);
+    const limit = Math.min(100, Math.max(1, parseInt(req.query.limit) || 20));
+    const offset = (page - 1) * limit;
+
     const walletResult = await db.query(
       "SELECT public_key FROM wallets WHERE user_id = $1",
       [req.user.userId],
@@ -119,20 +123,34 @@ async function history(req, res, next) {
     if (!walletResult.rows[0]) return res.status(404).json({ error: "Wallet not found" });
 
     const { public_key } = walletResult.rows[0];
-    const result = await db.query(
-      `SELECT id, sender_wallet, recipient_wallet, amount, asset, memo, tx_hash, status, created_at
-       FROM transactions
-       WHERE sender_wallet = $1 OR recipient_wallet = $1
-       ORDER BY created_at DESC LIMIT 50`,
-      [public_key],
-    );
 
+    const [countResult, result] = await Promise.all([
+      db.query(
+        `SELECT COUNT(*) FROM transactions WHERE sender_wallet = $1 OR recipient_wallet = $1`,
+        [public_key],
+      ),
+      db.query(
+        `SELECT id, sender_wallet, recipient_wallet, amount, asset, memo, tx_hash, status, created_at
+         FROM transactions
+         WHERE sender_wallet = $1 OR recipient_wallet = $1
+         ORDER BY created_at DESC LIMIT $2 OFFSET $3`,
+        [public_key, limit, offset],
+      ),
+    ]);
+
+    const total = parseInt(countResult.rows[0].count);
     const transactions = result.rows.map((tx) => ({
       ...tx,
       direction: tx.sender_wallet === public_key ? "sent" : "received",
     }));
 
-    res.json({ transactions });
+    res.json({
+      transactions,
+      total,
+      page,
+      limit,
+      pages: Math.ceil(total / limit),
+    });
   } catch (err) {
     next(err);
   }
