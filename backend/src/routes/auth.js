@@ -1,14 +1,17 @@
 const router = require('express').Router();
 const { body, validationResult } = require('express-validator');
-const { register, login, refresh, logout, verifyEmail, getMe, setPIN, verifyPIN } = require('../controllers/authController');
 const {
   register,
   login,
   verifyEmail,
   getMe,
   setPIN,
-  verifyPIN
   verifyPIN,
+  setup2FA,
+  verify2FA,
+  disable2FA,
+  refresh,
+  logout,
   forgotPassword,
   resetPassword
 } = require('../controllers/authController');
@@ -77,6 +80,26 @@ router.post('/verify-pin',
   ],
   validate,
   verifyPIN
+);
+
+router.post('/2fa/setup', authMiddleware, setup2FA);
+
+router.post('/2fa/verify',
+  authMiddleware,
+  [
+    body('totp_code').matches(/^\d{6}$/).withMessage('TOTP code must be 6 digits')
+  ],
+  validate,
+  verify2FA
+);
+
+router.post('/2fa/disable',
+  authMiddleware,
+  [
+    body('password').notEmpty().withMessage('Password is required')
+  ],
+  validate,
+  disable2FA
 );
 
 module.exports = router;

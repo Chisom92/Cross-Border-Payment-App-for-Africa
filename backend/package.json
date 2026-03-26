@@ -27,7 +27,8 @@
     "node-pg-migrate": "^7.0.0",
     "nodemailer": "^8.0.3",
     "pg": "^8.11.3",
-    "qrcode": "^1.5.3",
+    "qrcode": "^1.5.4",
+    "speakeasy": "^2.0.0",
     "uuid": "^9.0.0",
     "web-push": "^3.6.7",
     "winston": "^3.11.0"
