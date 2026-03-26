@@ -4,6 +4,7 @@ const db = require("../db");
 const { sendPayment } = require("../services/stellar");
 const webhook = require("../services/webhook");
 const cache = require("../utils/cache");
+const { checkFraud, logFraudBlock } = require("../services/fraudDetection");
 
 // Configurable KYC transaction threshold in USD equivalent
 const KYC_THRESHOLD_USD = parseFloat(process.env.KYC_THRESHOLD_USD || "100");
@@ -15,16 +16,6 @@ function estimateUSDValue(amount, asset) {
   if (asset === "USD" || asset === "USDC") return parseFloat(amount);
   if (asset === "XLM") return parseFloat(amount) * XLM_USD_RATE;
   return 0; // unknown assets default to 0 — do not block
-}
-
-// Basic fraud check: block if >5 transactions in last 10 minutes
-async function fraudCheck(walletAddress) {
-  const result = await db.query(
-    `SELECT COUNT(*) FROM transactions
-     WHERE sender_wallet = $1 AND created_at > NOW() - INTERVAL '10 minutes'`,
-    [walletAddress],
-  );
-  return parseInt(result.rows[0].count) >= 5;
 }
 
 async function send(req, res, next) {
@@ -72,11 +63,12 @@ async function send(req, res, next) {
     }
 
     // Fraud protection
-    const isSuspicious = await fraudCheck(public_key);
-    if (isSuspicious) {
+    const fraudCheck = await checkFraud(public_key, amount, asset);
+    if (fraudCheck.blocked) {
+      await logFraudBlock(public_key, fraudCheck.reason, amount, asset);
       return res
         .status(429)
-        .json({ error: "Transaction limit reached. Please wait before sending again." });
+        .json({ error: fraudCheck.reason });
     }
 
     // Broadcast to Stellar
