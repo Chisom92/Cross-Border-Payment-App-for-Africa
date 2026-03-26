@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Send, Download, RefreshCw, Copy, CheckCheck } from 'lucide-react';
+import { Send, Download, RefreshCw, Copy, CheckCheck, Plus, Minus } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import api from '../utils/api';
 import { truncateAddress, CURRENCIES, convertFromXLM } from '../utils/currency';
@@ -32,6 +32,19 @@ export default function Dashboard() {
     navigator.clipboard.writeText(wallet?.public_key || '');
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
+  };
+
+  const handleAnchorAction = async (action) => {
+    try {
+      const asset = 'USDC'; // Default to USDC for fiat ramps
+      const endpoint = action === 'deposit' ? '/anchor/deposit' : '/anchor/withdraw';
+      const res = await api.post(endpoint, { asset });
+      
+      // Open anchor iframe/popup
+      window.open(res.data.url, 'anchor', 'width=500,height=600');
+    } catch (err) {
+      toast.error(err.response?.data?.error || `Failed to ${action}`);
+    }
   };
 
   const xlmBalance = wallet?.balances?.find(b => b.asset === 'XLM')?.balance || '0';
@@ -113,6 +126,28 @@ export default function Dashboard() {
             <Download size={20} />
           </div>
           <span className="font-semibold text-gray-900 dark:text-white">{t('dashboard.receive')}</span>
+        </button>
+      </div>
+
+      {/* Fiat on/off ramp buttons */}
+      <div className="grid grid-cols-2 gap-3">
+        <button
+          onClick={() => handleAnchorAction('deposit')}
+          className="bg-green-500/10 hover:bg-green-500/20 border border-green-500/30 rounded-xl p-4 flex items-center gap-3 shadow-sm transition-all"
+        >
+          <div className="w-10 h-10 bg-green-500/20 rounded-lg flex items-center justify-center text-green-500">
+            <Plus size={20} />
+          </div>
+          <span className="font-semibold text-green-600 dark:text-green-400">{t('dashboard.add_money') || 'Add Money'}</span>
+        </button>
+        <button
+          onClick={() => handleAnchorAction('withdraw')}
+          className="bg-blue-500/10 hover:bg-blue-500/20 border border-blue-500/30 rounded-xl p-4 flex items-center gap-3 shadow-sm transition-all"
+        >
+          <div className="w-10 h-10 bg-blue-500/20 rounded-lg flex items-center justify-center text-blue-500">
+            <Minus size={20} />
+          </div>
+          <span className="font-semibold text-blue-600 dark:text-blue-400">{t('dashboard.withdraw') || 'Withdraw'}</span>
         </button>
       </div>
 
