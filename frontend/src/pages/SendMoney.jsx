@@ -14,6 +14,7 @@ const DEFAULT_SLIPPAGE = 1;
 export default function SendMoney() {
   const navigate = useNavigate();
   const { t } = useTranslation();
+  const submitButtonRef = React.useRef(null);
   const [form, setForm] = useState({
     recipient_address: '',
     amount: '',
@@ -29,6 +30,7 @@ export default function SendMoney() {
   const [showPINVerification, setShowPINVerification] = useState(false);
   const [loading, setLoading] = useState(false);
   const [confirmed, setConfirmed] = useState(false);
+  const [keyboardOpen, setKeyboardOpen] = useState(false);
   const { currencies, convertFromXLM, usingApproximateRates } = useExchangeRates();
   const [pathResult, setPathResult] = useState(null);
   const [pathLoading, setPathLoading] = useState(false);
@@ -39,6 +41,19 @@ export default function SendMoney() {
     api.get('/wallet/contacts').then(r => setContacts(r.data.contacts || [])).catch(() => {});
   }, []);
 
+  useEffect(() => {
+    const handleResize = () => {
+      if (window.visualViewport) {
+        const isOpen = window.visualViewport.height < window.innerHeight * 0.75;
+        setKeyboardOpen(isOpen);
+        if (isOpen && submitButtonRef.current) {
+          setTimeout(() => submitButtonRef.current?.scrollIntoView({ behavior: 'smooth', block: 'nearest' }), 100);
+        }
+      }
+    };
+    window.visualViewport?.addEventListener('resize', handleResize);
+    return () => window.visualViewport?.removeEventListener('resize', handleResize);
+  }, []);
   // Debounced path finding
   const findPath = useCallback(async () => {
     if (!isCrossAsset || !form.amount || !form.recipient_address) {
@@ -106,8 +121,16 @@ export default function SendMoney() {
         });
       }
       const m = form.memo.trim();
+      let recipientAddress = form.recipient_address;
+      
+      // Resolve federation address if needed
+      if (recipientAddress.includes('*')) {
+        const res = await api.get('/payments/resolve-federation', { params: { address: recipientAddress } });
+        recipientAddress = res.data.public_key;
+      }
+      
       const payload = {
-        recipient_address: form.recipient_address,
+        recipient_address: recipientAddress,
         amount: parseFloat(form.amount),
         asset: form.asset
       };
@@ -128,14 +151,14 @@ export default function SendMoney() {
   };
 
   return (
-    <div className="px-4 py-6 max-w-lg mx-auto">
+    <div className="px-4 py-6 max-w-lg mx-auto pb-safe" style={{ paddingBottom: keyboardOpen ? 'max(1.5rem, env(safe-area-inset-bottom))' : '1.5rem' }}>
       <button onClick={() => navigate(-1)} className="text-gray-400 hover:text-white mb-6 flex items-center gap-1">
         <ArrowLeft size={18} /> {t('common.back')}
       </button>
 
       <h2 className="text-2xl font-bold text-white mb-6">{t('send.title')}</h2>
 
-      <form onSubmit={handleSubmit} className="space-y-4">
+      <form onSubmit={handleSubmit} className="space-y-4 overflow-y-auto" style={{ maxHeight: keyboardOpen ? 'calc(100vh - 200px)' : 'auto' }}>
         {/* Recipient */}
         <div>
           <div className="flex items-center justify-between mb-1">
@@ -160,7 +183,7 @@ export default function SendMoney() {
           <input
             type="text"
             required
-            placeholder={t('send.recipient_placeholder')}
+            placeholder={t('send.recipient_placeholder') || 'Wallet address or username*domain'}
             value={form.recipient_address}
             onChange={e => setForm({ ...form, recipient_address: e.target.value })}
             className="w-full bg-gray-800 border border-gray-700 rounded-xl px-4 py-3 text-white placeholder-gray-500 focus:outline-none focus:border-primary-500 transition-colors font-mono text-sm"
@@ -338,6 +361,7 @@ export default function SendMoney() {
         )}
 
         <button
+          ref={submitButtonRef}
           type="submit"
           disabled={loading || (isCrossAsset && !pathResult)}
           className={`w-full font-semibold py-3.5 rounded-xl flex items-center justify-center gap-2 transition-colors ${

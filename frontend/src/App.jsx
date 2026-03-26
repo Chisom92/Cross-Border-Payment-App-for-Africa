@@ -14,6 +14,7 @@ import SendMoney from "./pages/SendMoney";
 import ReceiveMoney from "./pages/ReceiveMoney";
 import TransactionHistory from "./pages/TransactionHistory";
 import Profile from "./pages/Profile";
+import Analytics from "./pages/Analytics";
 import KYCVerification from "./pages/KYCVerification";
 import Webhooks from "./pages/Webhooks";
 import Layout from "./components/Layout";
@@ -152,6 +153,7 @@ export default function App() {
             <Route path="send" element={<SendMoney />} />
             <Route path="receive" element={<ReceiveMoney />} />
             <Route path="history" element={<TransactionHistory />} />
+            <Route path="analytics" element={<Analytics />} />
             <Route path="profile" element={<Profile />} />
             <Route path="kyc" element={<KYCVerification />} />
             <Route path="webhooks" element={<Webhooks />} />

@@ -1,10 +1,15 @@
 const router = require('express').Router();
+const { query, validationResult, body } = require('express-validator');
+const StellarSdk = require('@stellar/stellar-sdk');
+const authMiddleware = require('../middleware/auth');
+const idempotency = require('../middleware/idempotency');
 const { query, validationResult } = require('express-validator');
 const authMiddleware = require('../middleware/auth');
 const idempotency = require('../middleware/idempotency');
 const { send, history, findPath, sendPath } = require('../controllers/paymentController');
 const { send, history, exportCSV } = require('../controllers/paymentController');
 const { send, history } = require('../controllers/paymentController');
+const { resolveFederationAddress } = require('../services/stellar');
 const paymentSendValidators = require('../validators/paymentSendValidators');
 const { ALLOWED_HISTORY_ASSETS } = require('../utils/historyQuery');
 
@@ -43,14 +48,27 @@ const MAX_TRANSACTION_AMOUNT = parseFloat(process.env.MAX_TRANSACTION_AMOUNT || 
 
 router.use(authMiddleware);
 
-router.post('/send', paymentSendValidators, validate, idempotency, send);
+// Federation address resolution
+router.get('/resolve-federation',
+  [query('address').notEmpty().withMessage('Address is required')],
+  validate,
+  async (req, res) => {
+    try {
+      const publicKey = await resolveFederationAddress(req.query.address);
+      res.json({ public_key: publicKey });
+    } catch (err) {
+      res.status(err.status || 400).json({ error: err.message });
+    }
+  }
+);
+
 router.post('/send',
   [
     body('recipient_address')
       .notEmpty().withMessage('Recipient address is required')
       .custom((value) => {
-        if (!StellarSdk.StrKey.isValidEd25519PublicKey(value)) {
-          throw new Error('Invalid Stellar wallet address');
+        if (!value.includes('*') && !StellarSdk.StrKey.isValidEd25519PublicKey(value)) {
+          throw new Error('Invalid Stellar wallet address or federation address');
         }
         return true;
       }),
