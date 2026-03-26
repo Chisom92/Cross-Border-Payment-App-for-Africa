@@ -151,6 +151,8 @@ function buildStellarMemo(memo, memoType = 'text') {
   }
 }
 
+// Create claimable balance for offline recipient
+async function createClaimableBalance({
 // Resolve federation address to public key
 async function resolveFederationAddress(address) {
   if (!address.includes('*')) return address;
@@ -194,10 +196,18 @@ async function sendPayment({
     fee: await withRetry(() => server.fetchBaseFee(), { label: 'fetchBaseFee' }),
     networkPassphrase
   })
+    .addOperation(StellarSdk.Operation.createClaimableBalance({
     .addOperation(StellarSdk.Operation.payment({
       destination: resolvedRecipient,
       asset: assetObj,
-      amount: String(amount)
+      amount: String(amount),
+      claimants: [
+        {
+          destination: recipientPublicKey,
+          predicate: StellarSdk.Predicate.predUnconditional()
+        }
+      ],
+      clawbackEnabled: true
     }))
     .setTimeout(30);
 
@@ -207,11 +217,108 @@ async function sendPayment({
   const transaction = txBuilder.build();
   transaction.sign(senderKeypair);
 
+  const result = await server.submitTransaction(transaction);
+  
+  // Extract claimable balance ID from result
+  const claimableBalanceId = result.result_meta_xdr 
+    ? extractClaimableBalanceId(result) 
+    : null;
+
   const result = await withRetry(() => server.submitTransaction(transaction), { label: 'submitTransaction' });
   return {
     transactionHash: result.hash,
-    ledger: result.ledger
+    ledger: result.ledger,
+    claimableBalanceId
   };
+}
+
+// Extract claimable balance ID from transaction result
+function extractClaimableBalanceId(result) {
+  try {
+    const xdr = StellarSdk.xdr.TransactionMeta.fromXDR(result.result_meta_xdr, 'base64');
+    const operations = xdr.v3().operations();
+    for (const op of operations) {
+      const changes = op.changes();
+      for (const change of changes) {
+        if (change.discriminant().name === 'ledgerEntryCreated') {
+          const entry = change.created().data();
+          if (entry.discriminant().name === 'claimableBalance') {
+            return entry.claimableBalance().balanceId().claimableBalanceId().toString('hex');
+          }
+        }
+      }
+    }
+  } catch (e) {
+    logger.warn('Failed to extract claimable balance ID', { error: e.message });
+  }
+  return null;
+}
+
+// Send payment
+async function sendPayment({
+  senderPublicKey,
+  encryptedSecretKey,
+  recipientPublicKey,
+  amount,
+  asset = 'XLM',
+  memo,
+  memoType = 'text'
+}) {
+  const assetObj = resolveAsset(asset);
+
+  try {
+    // Trustline check is only required for non-native assets
+    if (asset !== 'XLM') {
+      await checkTrustline(recipientPublicKey, assetObj);
+    }
+
+    const secretKey = decryptPrivateKey(encryptedSecretKey);
+    const senderKeypair = StellarSdk.Keypair.fromSecret(secretKey);
+    const senderAccount = await server.loadAccount(senderPublicKey);
+
+    const txBuilder = new StellarSdk.TransactionBuilder(senderAccount, {
+      fee: await server.fetchBaseFee(),
+      networkPassphrase
+    })
+      .addOperation(StellarSdk.Operation.payment({
+        destination: recipientPublicKey,
+        asset: assetObj,
+        amount: String(amount)
+      }))
+      .setTimeout(30);
+
+    const memoObj = memo ? buildStellarMemo(memo, memoType) : null;
+    if (memoObj) txBuilder.addMemo(memoObj);
+
+    const transaction = txBuilder.build();
+    transaction.sign(senderKeypair);
+
+    const result = await server.submitTransaction(transaction);
+    return {
+      transactionHash: result.hash,
+      ledger: result.ledger,
+      type: 'payment'
+    };
+  } catch (err) {
+    // Fallback to claimable balance if account doesn't exist
+    if (err.response?.status === 400 && err.response?.data?.extras?.result_codes?.transaction === 'tx_failed') {
+      logger.info('Account not found, creating claimable balance', { recipient: recipientPublicKey });
+      const result = await createClaimableBalance({
+        senderPublicKey,
+        encryptedSecretKey,
+        recipientPublicKey,
+        amount,
+        asset,
+        memo,
+        memoType
+      });
+      return {
+        ...result,
+        type: 'claimable_balance'
+      };
+    }
+    throw err;
+  }
 }
 
 // Fetch recent transactions for an account
@@ -235,6 +342,7 @@ async function getTransactions(publicKey, limit = 20) {
   }
 }
 
+module.exports = { createWallet, getBalance, sendPayment, getTransactions, decryptPrivateKey, createClaimableBalance };
 module.exports = { createWallet, getBalance, sendPayment, getTransactions, decryptPrivateKey, resolveFederationAddress };
 /**
  * Lightweight Horizon reachability check (SDK v12 has no serverInfo(); this is equivalent).

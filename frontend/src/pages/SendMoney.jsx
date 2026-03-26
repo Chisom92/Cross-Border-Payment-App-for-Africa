@@ -1,3 +1,6 @@
+import React, { useState, useEffect } from 'react';
+import { useNavigate, useSearchParams } from 'react-router-dom';
+import { ArrowLeft, Send, ChevronDown, Users, Camera } from 'lucide-react';
 import React, { useState, useEffect, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { ArrowLeft, Send, ChevronDown, Users, Camera, ArrowRightLeft } from 'lucide-react';
@@ -14,6 +17,12 @@ const DEFAULT_SLIPPAGE = 1;
 export default function SendMoney() {
   const navigate = useNavigate();
   const { t } = useTranslation();
+  const [searchParams] = useSearchParams();
+  const [form, setForm] = useState({
+    recipient_address: searchParams.get('to') || '',
+    amount: searchParams.get('amount') || '',
+    asset: searchParams.get('asset') || 'XLM',
+    memo: searchParams.get('memo') || '',
   const submitButtonRef = React.useRef(null);
   const [form, setForm] = useState({
     recipient_address: '',
@@ -30,6 +39,7 @@ export default function SendMoney() {
   const [showPINVerification, setShowPINVerification] = useState(false);
   const [loading, setLoading] = useState(false);
   const [confirmed, setConfirmed] = useState(false);
+  const [requestId] = useState(searchParams.get('request'));
   const [keyboardOpen, setKeyboardOpen] = useState(false);
   const { currencies, convertFromXLM, usingApproximateRates } = useExchangeRates();
   const [pathResult, setPathResult] = useState(null);
@@ -138,7 +148,15 @@ export default function SendMoney() {
         payload.memo = m;
         payload.memo_type = form.memo_type;
       }
-      await api.post('/payments/send', payload);
+      const res = await api.post('/payments/send', payload);
+      
+      // Mark payment request as claimed if applicable
+      if (requestId) {
+        await api.post(`/payment-requests/${requestId}/claim`, {
+          txHash: res.data.transaction.tx_hash
+        }).catch(() => {});
+      }
+      
       toast.success(t('send.success'));
       navigate('/dashboard');
     } catch (err) {
