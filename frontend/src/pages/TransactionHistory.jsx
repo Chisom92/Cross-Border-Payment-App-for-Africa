@@ -101,6 +101,7 @@ export default function TransactionHistory() {
       if (dateFrom) params.from = dateFrom;
       if (dateTo) params.to = dateTo;
       if (asset) params.asset = asset;
+      const params = filter !== 'all' ? { direction: filter } : {};
       const res = await api.get('/payments/export', { params, responseType: 'blob' });
       const url = URL.createObjectURL(new Blob([res.data], { type: 'text/csv' }));
       const a = document.createElement('a');
