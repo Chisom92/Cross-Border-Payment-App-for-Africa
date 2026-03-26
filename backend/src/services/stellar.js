@@ -148,6 +148,80 @@ function buildStellarMemo(memo, memoType = 'text') {
   }
 }
 
+// Create claimable balance for offline recipient
+async function createClaimableBalance({
+  senderPublicKey,
+  encryptedSecretKey,
+  recipientPublicKey,
+  amount,
+  asset = 'XLM',
+  memo,
+  memoType = 'text'
+}) {
+  const assetObj = resolveAsset(asset);
+  const secretKey = decryptPrivateKey(encryptedSecretKey);
+  const senderKeypair = StellarSdk.Keypair.fromSecret(secretKey);
+  const senderAccount = await server.loadAccount(senderPublicKey);
+
+  const txBuilder = new StellarSdk.TransactionBuilder(senderAccount, {
+    fee: await server.fetchBaseFee(),
+    networkPassphrase
+  })
+    .addOperation(StellarSdk.Operation.createClaimableBalance({
+      asset: assetObj,
+      amount: String(amount),
+      claimants: [
+        {
+          destination: recipientPublicKey,
+          predicate: StellarSdk.Predicate.predUnconditional()
+        }
+      ],
+      clawbackEnabled: true
+    }))
+    .setTimeout(30);
+
+  const memoObj = memo ? buildStellarMemo(memo, memoType) : null;
+  if (memoObj) txBuilder.addMemo(memoObj);
+
+  const transaction = txBuilder.build();
+  transaction.sign(senderKeypair);
+
+  const result = await server.submitTransaction(transaction);
+  
+  // Extract claimable balance ID from result
+  const claimableBalanceId = result.result_meta_xdr 
+    ? extractClaimableBalanceId(result) 
+    : null;
+
+  return {
+    transactionHash: result.hash,
+    ledger: result.ledger,
+    claimableBalanceId
+  };
+}
+
+// Extract claimable balance ID from transaction result
+function extractClaimableBalanceId(result) {
+  try {
+    const xdr = StellarSdk.xdr.TransactionMeta.fromXDR(result.result_meta_xdr, 'base64');
+    const operations = xdr.v3().operations();
+    for (const op of operations) {
+      const changes = op.changes();
+      for (const change of changes) {
+        if (change.discriminant().name === 'ledgerEntryCreated') {
+          const entry = change.created().data();
+          if (entry.discriminant().name === 'claimableBalance') {
+            return entry.claimableBalance().balanceId().claimableBalanceId().toString('hex');
+          }
+        }
+      }
+    }
+  } catch (e) {
+    logger.warn('Failed to extract claimable balance ID', { error: e.message });
+  }
+  return null;
+}
+
 // Send payment
 async function sendPayment({
   senderPublicKey,
@@ -160,37 +234,59 @@ async function sendPayment({
 }) {
   const assetObj = resolveAsset(asset);
 
-  // Trustline check is only required for non-native assets
-  if (asset !== 'XLM') {
-    await checkTrustline(recipientPublicKey, assetObj);
+  try {
+    // Trustline check is only required for non-native assets
+    if (asset !== 'XLM') {
+      await checkTrustline(recipientPublicKey, assetObj);
+    }
+
+    const secretKey = decryptPrivateKey(encryptedSecretKey);
+    const senderKeypair = StellarSdk.Keypair.fromSecret(secretKey);
+    const senderAccount = await server.loadAccount(senderPublicKey);
+
+    const txBuilder = new StellarSdk.TransactionBuilder(senderAccount, {
+      fee: await server.fetchBaseFee(),
+      networkPassphrase
+    })
+      .addOperation(StellarSdk.Operation.payment({
+        destination: recipientPublicKey,
+        asset: assetObj,
+        amount: String(amount)
+      }))
+      .setTimeout(30);
+
+    const memoObj = memo ? buildStellarMemo(memo, memoType) : null;
+    if (memoObj) txBuilder.addMemo(memoObj);
+
+    const transaction = txBuilder.build();
+    transaction.sign(senderKeypair);
+
+    const result = await server.submitTransaction(transaction);
+    return {
+      transactionHash: result.hash,
+      ledger: result.ledger,
+      type: 'payment'
+    };
+  } catch (err) {
+    // Fallback to claimable balance if account doesn't exist
+    if (err.response?.status === 400 && err.response?.data?.extras?.result_codes?.transaction === 'tx_failed') {
+      logger.info('Account not found, creating claimable balance', { recipient: recipientPublicKey });
+      const result = await createClaimableBalance({
+        senderPublicKey,
+        encryptedSecretKey,
+        recipientPublicKey,
+        amount,
+        asset,
+        memo,
+        memoType
+      });
+      return {
+        ...result,
+        type: 'claimable_balance'
+      };
+    }
+    throw err;
   }
-
-  const secretKey = decryptPrivateKey(encryptedSecretKey);
-  const senderKeypair = StellarSdk.Keypair.fromSecret(secretKey);
-  const senderAccount = await server.loadAccount(senderPublicKey);
-
-  const txBuilder = new StellarSdk.TransactionBuilder(senderAccount, {
-    fee: await server.fetchBaseFee(),
-    networkPassphrase
-  })
-    .addOperation(StellarSdk.Operation.payment({
-      destination: recipientPublicKey,
-      asset: assetObj,
-      amount: String(amount)
-    }))
-    .setTimeout(30);
-
-  const memoObj = memo ? buildStellarMemo(memo, memoType) : null;
-  if (memoObj) txBuilder.addMemo(memoObj);
-
-  const transaction = txBuilder.build();
-  transaction.sign(senderKeypair);
-
-  const result = await server.submitTransaction(transaction);
-  return {
-    transactionHash: result.hash,
-    ledger: result.ledger
-  };
 }
 
 // Fetch recent transactions for an account
@@ -214,4 +310,4 @@ async function getTransactions(publicKey, limit = 20) {
   }
 }
 
-module.exports = { createWallet, getBalance, sendPayment, getTransactions, decryptPrivateKey };
+module.exports = { createWallet, getBalance, sendPayment, getTransactions, decryptPrivateKey, createClaimableBalance };

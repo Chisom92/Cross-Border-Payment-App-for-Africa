@@ -80,7 +80,7 @@ async function send(req, res, next) {
     }
 
     // Broadcast to Stellar
-    const { transactionHash, ledger } = await sendPayment({
+    const { transactionHash, ledger, type, claimableBalanceId } = await sendPayment({
       senderPublicKey: public_key,
       encryptedSecretKey: encrypted_secret_key,
       recipientPublicKey: recipient_address,
@@ -91,21 +91,24 @@ async function send(req, res, next) {
     });
 
     // Save to DB
+    const txStatus = type === 'claimable_balance' ? 'pending_claim' : 'completed';
     await db.query(
-      `INSERT INTO transactions (id, sender_wallet, recipient_wallet, amount, asset, memo, memo_type, tx_hash, status)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'completed')`,
-      [txId, public_key, recipient_address, amount, asset, memo || null, memo_type, transactionHash],
+      `INSERT INTO transactions (id, sender_wallet, recipient_wallet, amount, asset, memo, memo_type, tx_hash, status, claimable_balance_id)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
+      [txId, public_key, recipient_address, amount, asset, memo || null, memo_type, transactionHash, txStatus, claimableBalanceId || null],
     );
 
     // Invalidate sender's cached balance — it changed after this payment
     await cache.del(`balance:${public_key}`);
 
-    const txData = { id: txId, tx_hash: transactionHash, ledger, amount, asset, sender: public_key, recipient: recipient_address };
+    const txData = { id: txId, tx_hash: transactionHash, ledger, amount, asset, sender: public_key, recipient: recipient_address, type };
     webhook.deliver('payment.sent', txData).catch(() => {});
-    webhook.deliver('payment.received', txData).catch(() => {});
+    if (type !== 'claimable_balance') {
+      webhook.deliver('payment.received', txData).catch(() => {});
+    }
 
     res.json({
-      message: "Payment sent successfully",
+      message: type === 'claimable_balance' ? "Claimable balance created" : "Payment sent successfully",
       transaction: {
         id: txId,
         tx_hash: transactionHash,
@@ -113,6 +116,8 @@ async function send(req, res, next) {
         amount,
         asset,
         recipient: recipient_address,
+        type,
+        claimableBalanceId
       },
     });
   } catch (err) {
