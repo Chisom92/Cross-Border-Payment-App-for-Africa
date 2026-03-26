@@ -1,5 +1,6 @@
 const router = require('express').Router();
 const { body, validationResult } = require('express-validator');
+const { register, login, refresh, logout, verifyEmail, getMe, setPIN, verifyPIN } = require('../controllers/authController');
 const {
   register,
   login,
@@ -57,6 +58,8 @@ router.post(
 
 router.get('/verify-email', verifyEmail);
 router.get('/me', authMiddleware, getMe);
+router.post('/refresh', refresh);
+router.post('/logout', logout);
 
 router.post('/set-pin',
   authMiddleware,

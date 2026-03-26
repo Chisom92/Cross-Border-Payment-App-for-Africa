@@ -1,4 +1,5 @@
 require('dotenv').config();
+
 const validateEnv = require('./utils/validateEnv');
 const logger = require('./utils/logger');
 
