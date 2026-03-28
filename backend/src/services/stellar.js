@@ -417,6 +417,61 @@ async function sendPathPayment({
 }
 
 // ---------------------------------------------------------------------------
+// Trustline management
+// ---------------------------------------------------------------------------
+
+/**
+ * Add (or update limit on) a trustline for a non-native asset.
+ * limit defaults to the Stellar max if not provided.
+ */
+async function addTrustline({ publicKey, encryptedSecretKey, asset, limit }) {
+  const assetObj = resolveAsset(asset);
+  const secretKey = decryptPrivateKey(encryptedSecretKey);
+  const keypair = StellarSdk.Keypair.fromSecret(secretKey);
+  const account = await withRetry(() => server.loadAccount(publicKey), { label: 'loadAccount(trustline)' });
+
+  const op = StellarSdk.Operation.changeTrust({
+    asset: assetObj,
+    ...(limit !== undefined ? { limit: String(limit) } : {}),
+  });
+
+  const tx = new StellarSdk.TransactionBuilder(account, {
+    fee: await withRetry(() => server.fetchBaseFee(), { label: 'fetchBaseFee' }),
+    networkPassphrase,
+  })
+    .addOperation(op)
+    .setTimeout(30)
+    .build();
+
+  tx.sign(keypair);
+  const result = await withRetry(() => server.submitTransaction(tx), { label: 'submitTransaction(addTrustline)' });
+  return { transactionHash: result.hash };
+}
+
+/**
+ * Remove a trustline by setting limit=0.
+ * Stellar will reject this if the account still holds a balance of that asset.
+ */
+async function removeTrustline({ publicKey, encryptedSecretKey, asset }) {
+  return addTrustline({ publicKey, encryptedSecretKey, asset, limit: '0' });
+}
+
+/**
+ * List all non-native trustlines on an account directly from Horizon.
+ */
+async function getTrustlines(publicKey) {
+  const account = await withRetry(() => server.loadAccount(publicKey), { label: 'loadAccount(trustlines)' });
+  return account.balances
+    .filter(b => b.asset_type !== 'native')
+    .map(b => ({
+      asset: b.asset_code,
+      issuer: b.asset_issuer,
+      balance: b.balance,
+      limit: b.limit,
+    }));
+}
+
+// ---------------------------------------------------------------------------
 // Multisig helpers
 // ---------------------------------------------------------------------------
 
@@ -490,6 +545,9 @@ module.exports = {
   sendPathPayment,
   resolveFederationAddress,
   createClaimableBalance,
+  addTrustline,
+  removeTrustline,
+  getTrustlines,
   addAccountSigner,
   removeAccountSigner,
 };

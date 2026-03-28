@@ -2,7 +2,7 @@ const router = require('express').Router();
 const { body, param, validationResult } = require('express-validator');
 const StellarSdk = require('@stellar/stellar-sdk');
 const authMiddleware = require('../middleware/auth');
-const { getWallet, getQRCode, getWalletTransactions, exportKey, upgradeToBusinessAccount, addSigner, removeSigner, listSigners } = require('../controllers/walletController');
+const { getWallet, getQRCode, getWalletTransactions, exportKey, upgradeToBusinessAccount, addSigner, removeSigner, listSigners, listTrustlines, addTrustlineHandler, removeTrustlineHandler } = require('../controllers/walletController');
 const { getContacts, addContact, deleteContact } = require('../controllers/contactsController');
 
 const validate = (req, res, next) => {
@@ -41,6 +41,23 @@ router.post('/contacts',
   addContact
 );
 router.delete('/contacts/:id', deleteContact);
+
+// Trustline routes
+router.get('/trustlines', listTrustlines);
+router.post('/trustline',
+  [
+    body('asset').trim().notEmpty().withMessage('asset is required')
+      .isAlphanumeric().isLength({ max: 12 }).withMessage('Invalid asset code'),
+    body('limit').optional().isFloat({ min: 0 }).withMessage('limit must be a non-negative number'),
+  ],
+  validate,
+  addTrustlineHandler
+);
+router.delete('/trustline/:asset',
+  [param('asset').isAlphanumeric().isLength({ max: 12 }).withMessage('Invalid asset code')],
+  validate,
+  removeTrustlineHandler
+);
 
 // Multisig / business account routes
 router.post('/upgrade-business', upgradeToBusinessAccount);

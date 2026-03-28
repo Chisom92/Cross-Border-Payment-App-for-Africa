@@ -1,6 +1,6 @@
 const bcrypt = require('bcryptjs');
 const db = require('../db');
-const { getBalance, getTransactions, decryptPrivateKey, addAccountSigner, removeAccountSigner } = require('../services/stellar');
+const { getBalance, getTransactions, decryptPrivateKey, addAccountSigner, removeAccountSigner, addTrustline, removeTrustline, getTrustlines } = require('../services/stellar');
 const QRCode = require('qrcode');
 const cache = require('../utils/cache');
 
@@ -192,4 +192,45 @@ async function listSigners(req, res, next) {
   }
 }
 
-module.exports = { getWallet, getQRCode, getWalletTransactions, exportKey, upgradeToBusinessAccount, addSigner, removeSigner, listSigners };
+async function listTrustlines(req, res, next) {
+  try {
+    const result = await db.query('SELECT public_key FROM wallets WHERE user_id = $1', [req.user.userId]);
+    if (!result.rows[0]) return res.status(404).json({ error: 'Wallet not found' });
+    const trustlines = await getTrustlines(result.rows[0].public_key);
+    res.json({ trustlines });
+  } catch (err) {
+    next(err);
+  }
+}
+
+async function addTrustlineHandler(req, res, next) {
+  try {
+    const { asset, limit } = req.body;
+    const result = await db.query('SELECT public_key, encrypted_secret_key FROM wallets WHERE user_id = $1', [req.user.userId]);
+    if (!result.rows[0]) return res.status(404).json({ error: 'Wallet not found' });
+    const { public_key, encrypted_secret_key } = result.rows[0];
+    const { transactionHash } = await addTrustline({ publicKey: public_key, encryptedSecretKey: encrypted_secret_key, asset, limit });
+    res.status(201).json({ message: 'Trustline added', transaction_hash: transactionHash });
+  } catch (err) {
+    next(err);
+  }
+}
+
+async function removeTrustlineHandler(req, res, next) {
+  try {
+    const { asset } = req.params;
+    const result = await db.query('SELECT public_key, encrypted_secret_key FROM wallets WHERE user_id = $1', [req.user.userId]);
+    if (!result.rows[0]) return res.status(404).json({ error: 'Wallet not found' });
+    const { public_key, encrypted_secret_key } = result.rows[0];
+    const { transactionHash } = await removeTrustline({ publicKey: public_key, encryptedSecretKey: encrypted_secret_key, asset });
+    res.json({ message: 'Trustline removed', transaction_hash: transactionHash });
+  } catch (err) {
+    // Stellar returns tx_failed / op_invalid_limit when balance > 0
+    if (err.response?.data?.extras?.result_codes?.operations?.includes('op_invalid_limit')) {
+      return res.status(400).json({ error: 'Cannot remove trustline: account still holds a balance of this asset' });
+    }
+    next(err);
+  }
+}
+
+module.exports = { getWallet, getQRCode, getWalletTransactions, exportKey, upgradeToBusinessAccount, addSigner, removeSigner, listSigners, listTrustlines, addTrustlineHandler, removeTrustlineHandler };
