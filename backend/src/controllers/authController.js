@@ -2,7 +2,8 @@ const crypto = require('crypto');
 const bcrypt = require('bcryptjs');
 const { v4: uuidv4 } = require('uuid');
 const db = require('../db');
-const { createWallet, encryptPrivateKey } = require('../services/stellar');
+const logger = require('../utils/logger');
+const { createWallet, encryptPrivateKey, addTrustline } = require('../services/stellar');
 const { hashPIN, comparePIN, validatePIN } = require('../services/pin');
 const { sendVerificationEmail, sendPasswordResetEmail } = require('../services/email');
 const { generateSecret, verifyToken, generateBackupCodes, useBackupCode } = require('../services/twofa');
@@ -68,6 +69,13 @@ async function register(req, res, next) {
       [uuidv4(), userId, publicKey, encryptedSecretKey]
     );
     await db.query('COMMIT');
+
+    // Auto-add USDC trustline so new accounts can receive USDC immediately
+    if (process.env.USDC_ISSUER) {
+      addTrustline({ publicKey, encryptedSecretKey, asset: 'USDC' }).catch(e =>
+        logger.warn('Auto USDC trustline failed', { error: e.message })
+      );
+    }
 
     await sendVerificationEmail(email, raw);
     res.status(201).json({ message: 'Account created. Please verify your email before logging in.' });
