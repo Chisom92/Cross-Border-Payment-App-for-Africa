@@ -7,6 +7,7 @@ const cache = require("../utils/cache");
 const { checkFraud, logFraudBlock } = require("../services/fraudDetection");
 const { parseHistoryFrom, parseHistoryTo, normalizeAsset } = require("../utils/historyQuery");
 const { isMemoRequired } = require("../services/memoRequired");
+const { awardReferralCredit } = require("./referralController");
 
 // Configurable KYC transaction threshold in USD equivalent
 const KYC_THRESHOLD_USD = parseFloat(process.env.KYC_THRESHOLD_USD || "100");
@@ -138,6 +139,15 @@ async function send(req, res, next) {
 
     // Invalidate sender's cached balance — it changed after this payment
     await cache.del(`balance:${public_key}`);
+
+    // Award referral credit to referrer if this is the sender's first transaction
+    const txCount = await db.query(
+      `SELECT COUNT(*) AS cnt FROM transactions WHERE sender_wallet = $1`,
+      [public_key]
+    );
+    if (parseInt(txCount.rows[0].cnt, 10) === 1) {
+      awardReferralCredit(req.user.userId).catch(() => {});
+    }
 
     const txData = { id: txId, tx_hash: transactionHash, ledger, amount, asset, sender: public_key, recipient: recipient_address, type };
     webhook.deliver("payment.sent", txData).catch(() => {});

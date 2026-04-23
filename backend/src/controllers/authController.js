@@ -32,7 +32,7 @@ function generateVerificationToken() {
 
 async function register(req, res, next) {
   try {
-    const { full_name, email, password, phone, secret_key: importedSecretKey } = req.body;
+    const { full_name, email, password, phone, secret_key: importedSecretKey, referral_code: referredBy } = req.body;
 
     const existing = await db.query('SELECT id FROM users WHERE email = $1', [email]);
     if (existing.rows.length > 0) {
@@ -43,6 +43,16 @@ async function register(req, res, next) {
     const userId = uuidv4();
     const { raw, hashed } = generateVerificationToken();
     const expiresAt = new Date(Date.now() + TOKEN_TTL_MS);
+
+    // Generate unique referral code for this user
+    const myReferralCode = crypto.randomBytes(5).toString('hex').toUpperCase(); // 10-char hex
+
+    // Validate referred_by code if provided
+    let validReferredBy = null;
+    if (referredBy) {
+      const ref = await db.query('SELECT id FROM users WHERE referral_code = $1', [referredBy]);
+      if (ref.rows.length > 0) validReferredBy = referredBy;
+    }
 
     let publicKey, encryptedSecretKey;
     if (importedSecretKey) {
@@ -60,9 +70,9 @@ async function register(req, res, next) {
 
     await db.query('BEGIN');
     await db.query(
-      `INSERT INTO users (id, full_name, email, password_hash, phone, email_verified, verification_token, token_expires_at)
-       VALUES ($1,$2,$3,$4,$5,FALSE,$6,$7)`,
-      [userId, full_name, email, passwordHash, phone || null, hashed, expiresAt]
+      `INSERT INTO users (id, full_name, email, password_hash, phone, email_verified, verification_token, token_expires_at, referral_code, referred_by)
+       VALUES ($1,$2,$3,$4,$5,FALSE,$6,$7,$8,$9)`,
+      [userId, full_name, email, passwordHash, phone || null, hashed, expiresAt, myReferralCode, validReferredBy]
     );
     await db.query(
       `INSERT INTO wallets (id, user_id, public_key, encrypted_secret_key) VALUES ($1,$2,$3,$4)`,
