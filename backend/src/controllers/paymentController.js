@@ -78,11 +78,12 @@ async function send(req, res, next) {
       }
     }
 
-    // Get sender wallet
-    const walletResult = await db.query(
-      "SELECT public_key, encrypted_secret_key FROM wallets WHERE user_id = $1",
-      [req.user.userId],
-    );
+    // Get sender wallet — caller may specify a wallet_id to send from a non-default wallet
+    const { wallet_id: sendWalletId } = req.body;
+    const walletQuery = sendWalletId
+      ? { text: "SELECT public_key, encrypted_secret_key FROM wallets WHERE id = $1 AND user_id = $2", values: [sendWalletId, req.user.userId] }
+      : { text: "SELECT public_key, encrypted_secret_key FROM wallets WHERE user_id = $1 ORDER BY is_default DESC, created_at ASC LIMIT 1", values: [req.user.userId] };
+    const walletResult = await db.query(walletQuery.text, walletQuery.values);
     if (!walletResult.rows[0]) return res.status(404).json({ error: "Wallet not found" });
 
     ({ public_key } = walletResult.rows[0]);
@@ -201,7 +202,7 @@ async function history(req, res, next) {
     }
 
     const walletResult = await db.query(
-      "SELECT public_key FROM wallets WHERE user_id = $1",
+      "SELECT public_key FROM wallets WHERE user_id = $1 ORDER BY is_default DESC, created_at ASC LIMIT 1",
       [req.user.userId],
     );
     if (!walletResult.rows[0]) return res.status(404).json({ error: "Wallet not found" });
@@ -307,10 +308,11 @@ async function sendPath(req, res, next) {
       }
     }
 
-    const walletResult = await db.query(
-      "SELECT public_key, encrypted_secret_key FROM wallets WHERE user_id = $1",
-      [req.user.userId],
-    );
+    const { wallet_id: sendWalletId } = req.body;
+    const pathWalletQuery = sendWalletId
+      ? { text: "SELECT public_key, encrypted_secret_key FROM wallets WHERE id = $1 AND user_id = $2", values: [sendWalletId, req.user.userId] }
+      : { text: "SELECT public_key, encrypted_secret_key FROM wallets WHERE user_id = $1 ORDER BY is_default DESC, created_at ASC LIMIT 1", values: [req.user.userId] };
+    const walletResult = await db.query(pathWalletQuery.text, pathWalletQuery.values);
     if (!walletResult.rows[0]) return res.status(404).json({ error: "Wallet not found" });
 
     ({ public_key } = walletResult.rows[0]);
@@ -372,7 +374,7 @@ async function sendPath(req, res, next) {
 async function exportCSV(req, res, next) {
   try {
     const walletResult = await db.query(
-      "SELECT public_key FROM wallets WHERE user_id = $1",
+      "SELECT public_key FROM wallets WHERE user_id = $1 ORDER BY is_default DESC, created_at ASC LIMIT 1",
       [req.user.userId],
     );
     if (!walletResult.rows[0]) return res.status(404).json({ error: "Wallet not found" });
