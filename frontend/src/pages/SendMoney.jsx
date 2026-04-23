@@ -202,7 +202,7 @@ export default function SendMoney() {
     setLoading(true);
     try {
       if (isCrossAsset && pathResult) {
-        await api.post('/payments/send-path', {
+        const res = await api.post('/payments/send-path', {
           recipient_address: form.recipient_address,
           source_asset: form.asset,
           source_amount: parseFloat(form.amount),
@@ -211,43 +211,34 @@ export default function SendMoney() {
           path: pathResult.path,
           memo: form.memo || undefined,
         });
+        toast.success(t('send.success'));
+        if (requestId) {
+          await api.post(`/payment-requests/${requestId}/claim`, {
+            txHash: res.data.transaction.tx_hash
+          }).catch(() => {});
+        }
+        navigate('/dashboard');
       } else {
-        await api.post('/payments/send', {
+        const payload = {
           recipient_address: form.recipient_address,
           amount: parseFloat(form.amount),
           asset: form.asset,
-          memo: form.memo || undefined,
-        });
+        };
+        if (form.memo.trim()) {
+          payload.memo = form.memo.trim();
+          payload.memo_type = form.memo_type;
+        }
+        const res = await api.post('/payments/send', payload);
+
+        if (requestId) {
+          await api.post(`/payment-requests/${requestId}/claim`, {
+            txHash: res.data.transaction.tx_hash
+          }).catch(() => {});
+        }
+
+        toast.success(t('send.success'));
+        navigate('/dashboard');
       }
-      const m = form.memo.trim();
-      let recipientAddress = form.recipient_address;
-      
-      // Resolve federation address if needed
-      if (recipientAddress.includes('*')) {
-        const res = await api.get('/payments/resolve-federation', { params: { address: recipientAddress } });
-        recipientAddress = res.data.public_key;
-      }
-      
-      const payload = {
-        recipient_address: recipientAddress,
-        amount: parseFloat(form.amount),
-        asset: form.asset
-      };
-      if (m) {
-        payload.memo = m;
-        payload.memo_type = form.memo_type;
-      }
-      const res = await api.post('/payments/send', payload);
-      
-      // Mark payment request as claimed if applicable
-      if (requestId) {
-        await api.post(`/payment-requests/${requestId}/claim`, {
-          txHash: res.data.transaction.tx_hash
-        }).catch(() => {});
-      }
-      
-      toast.success(t('send.success'));
-      navigate('/dashboard');
     } catch (err) {
       toast.error(err.response?.data?.error || t('send.error'));
       setConfirmed(false);
@@ -415,7 +406,7 @@ export default function SendMoney() {
               className="appearance-none w-full bg-gray-800 border border-gray-700 rounded-xl px-4 py-3 text-white focus:outline-none focus:border-primary-500 pr-8 transition-colors"
             >
               <option value="">Same as sent ({form.asset})</option>
-              {CURRENCIES.filter(c => c.code !== form.asset).map(c => (
+              {currencies.filter(c => c.code !== form.asset).map(c => (
                 <option key={c.code} value={c.code}>{c.flag} {c.code}</option>
               ))}
             </select>

@@ -20,6 +20,8 @@ import Analytics from "./pages/Analytics";
 import KYCVerification from "./pages/KYCVerification";
 import BusinessSettings from "./pages/BusinessSettings";
 import Swap from "./pages/Swap";
+import BatchPayment from "./pages/BatchPayment";
+import Webhooks from "./pages/Webhooks";
 import Layout from "./components/Layout";
 import ErrorBoundary from "./components/ErrorBoundary";
 
@@ -107,6 +109,7 @@ export default function App() {
               >
                 <Route path="dashboard" element={<Dashboard />} />
                 <Route path="send" element={<SendMoney />} />
+                <Route path="batch-payments" element={<BatchPayment />} />
                 <Route path="receive" element={<ReceiveMoney />} />
                 <Route path="request" element={<RequestMoney />} />
                 <Route path="scheduled" element={<ScheduledPayments />} />
