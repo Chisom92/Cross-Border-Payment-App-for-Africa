@@ -7,6 +7,7 @@ const cache = require("../utils/cache");
 const { checkFraud, logFraudBlock } = require("../services/fraudDetection");
 const { parseHistoryFrom, parseHistoryTo, normalizeAsset } = require("../utils/historyQuery");
 const { isMemoRequired } = require("../services/memoRequired");
+const { mintPoints } = require("../services/loyaltyToken");
 
 // Configurable KYC transaction threshold in USD equivalent
 const KYC_THRESHOLD_USD = parseFloat(process.env.KYC_THRESHOLD_USD || "100");
@@ -138,6 +139,10 @@ async function send(req, res, next) {
 
     // Invalidate sender's cached balance — it changed after this payment
     await cache.del(`balance:${public_key}`);
+
+    // Mint loyalty points: 1 point per 1 XLM (or XLM-equivalent) of volume
+    const loyaltyPoints = Math.max(1, Math.floor(parseFloat(amount)));
+    mintPoints({ recipientWallet: public_key, points: loyaltyPoints }).catch(() => {});
 
     const txData = { id: txId, tx_hash: transactionHash, ledger, amount, asset, sender: public_key, recipient: recipient_address, type };
     webhook.deliver("payment.sent", txData).catch(() => {});
