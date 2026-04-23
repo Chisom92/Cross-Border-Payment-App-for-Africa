@@ -130,6 +130,9 @@ export default function TransactionHistory() {
                       : `${t('history.from')} ${truncateAddress(tx.sender_wallet)}`}
                   </p>
                   {tx.memo && <p className="text-xs text-gray-600 mt-0.5">"{tx.memo}"</p>}
+                  {tx.private_note && tx.direction === 'sent' && (
+                    <p className="text-xs text-gray-600 mt-0.5">🔒 {tx.private_note}</p>
+                  )}
                   <div className="flex items-center justify-between mt-2">
                     <span className={`text-xs px-2 py-0.5 rounded-full ${STATUS_COLORS[tx.status] || STATUS_COLORS.pending}`}>
                       {tx.status}

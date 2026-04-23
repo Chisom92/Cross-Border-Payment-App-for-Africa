@@ -11,7 +11,7 @@ import PINVerificationModal from '../components/PINVerificationModal';
 export default function SendMoney() {
   const navigate = useNavigate();
   const { t } = useTranslation();
-  const [form, setForm] = useState({ recipient_address: '', amount: '', asset: 'XLM', memo: '' });
+  const [form, setForm] = useState({ recipient_address: '', amount: '', asset: 'XLM', memo: '', private_note: '' });
   const [contacts, setContacts] = useState([]);
   const [showContacts, setShowContacts] = useState(false);
   const [showScanner, setShowScanner] = useState(false);
@@ -41,7 +41,8 @@ export default function SendMoney() {
         recipient_address: form.recipient_address,
         amount: parseFloat(form.amount),
         asset: form.asset,
-        memo: form.memo || undefined
+        memo: form.memo || undefined,
+        private_note: form.private_note || undefined
       });
       toast.success(t('send.success'));
       navigate('/dashboard');
@@ -152,6 +153,19 @@ export default function SendMoney() {
           />
         </div>
 
+        {/* Private Note */}
+        <div>
+          <label className="text-sm text-gray-400 mb-1 block">Private note <span className="text-gray-600">(only visible to you)</span></label>
+          <input
+            type="text"
+            maxLength={500}
+            placeholder="Invoice #, project code, personal reminder…"
+            value={form.private_note}
+            onChange={e => setForm({ ...form, private_note: e.target.value })}
+            className="w-full bg-gray-800 border border-gray-700 rounded-xl px-4 py-3 text-white placeholder-gray-500 focus:outline-none focus:border-primary-500 transition-colors"
+          />
+        </div>
+
         {/* Confirmation preview */}
         {confirmed && (
           <div className="bg-yellow-500/10 border border-yellow-500/30 rounded-xl p-4 space-y-2">
@@ -160,6 +174,7 @@ export default function SendMoney() {
               <p>{t('send.confirm_to')} <span className="font-mono text-xs">{form.recipient_address.slice(0, 20)}...</span></p>
               <p>{t('send.confirm_amount')} <span className="text-white font-semibold">{form.amount} {form.asset}</span></p>
               {form.memo && <p>{t('send.confirm_memo')} {form.memo}</p>}
+              {form.private_note && <p className="text-gray-500">🔒 {form.private_note}</p>}
             </div>
           </div>
         )}

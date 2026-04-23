@@ -27,7 +27,7 @@ async function fraudCheck(walletAddress) {
 
 async function send(req, res, next) {
   try {
-    const { recipient_address, amount, asset = "XLM", memo } = req.body;
+    const { recipient_address, amount, asset = "XLM", memo, private_note } = req.body;
 
     // KYC check for high-value transactions
     const estimatedUSD = estimateUSDValue(amount, asset);
@@ -83,9 +83,9 @@ async function send(req, res, next) {
     // Save to DB
     const txId = uuidv4();
     await db.query(
-      `INSERT INTO transactions (id, sender_wallet, recipient_wallet, amount, asset, memo, tx_hash, status)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,'completed')`,
-      [txId, public_key, recipient_address, amount, asset, memo || null, transactionHash],
+      `INSERT INTO transactions (id, sender_wallet, recipient_wallet, amount, asset, memo, tx_hash, status, private_note)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,'completed',$8)`,
+      [txId, public_key, recipient_address, amount, asset, memo || null, transactionHash, private_note || null],
     );
 
     const txData = { id: txId, tx_hash: transactionHash, ledger, amount, asset, sender: public_key, recipient: recipient_address };
@@ -137,7 +137,7 @@ async function history(req, res, next) {
         [public_key],
       ),
       db.query(
-        `SELECT id, sender_wallet, recipient_wallet, amount, asset, memo, tx_hash, status, created_at
+        `SELECT id, sender_wallet, recipient_wallet, amount, asset, memo, private_note, tx_hash, status, created_at
          FROM transactions
          WHERE sender_wallet = $1 OR recipient_wallet = $1
          ORDER BY created_at DESC LIMIT $2 OFFSET $3`,
