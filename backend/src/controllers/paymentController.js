@@ -7,6 +7,7 @@ const cache = require("../utils/cache");
 const { checkFraud, logFraudBlock } = require("../services/fraudDetection");
 const { parseHistoryFrom, parseHistoryTo, normalizeAsset } = require("../utils/historyQuery");
 const { isMemoRequired } = require("../services/memoRequired");
+const { awardReferralCredit } = require("./referralController");
 const { mintPoints } = require("../services/loyaltyToken");
 const { depositFee } = require("../services/feeDistributor");
 
@@ -152,6 +153,13 @@ async function send(req, res, next) {
     // Invalidate sender's cached balance — it changed after this payment
     await cache.del(`balance:${public_key}`);
 
+    // Award referral credit to referrer if this is the sender's first transaction
+    const txCount = await db.query(
+      `SELECT COUNT(*) AS cnt FROM transactions WHERE sender_wallet = $1`,
+      [public_key]
+    );
+    if (parseInt(txCount.rows[0].cnt, 10) === 1) {
+      awardReferralCredit(req.user.userId).catch(() => {});
     // Mint loyalty points: 1 point per 1 XLM (or XLM-equivalent) of volume
     const loyaltyPoints = Math.max(1, Math.floor(parseFloat(amount)));
     mintPoints({ recipientWallet: public_key, points: loyaltyPoints }).catch(() => {});

@@ -24,6 +24,7 @@ const analyticsRoutes = require('./routes/analytics');
 const dexRoutes = require('./routes/dex');
 const supportRoutes = require('./routes/support');
 const agentEscrowRoutes = require('./routes/agentEscrow');
+const referralRoutes = require('./routes/referrals');
 const loyaltyRoutes = require('./routes/loyalty');
 const disputeRoutes = require('./routes/disputes');
 
@@ -78,6 +79,7 @@ app.use('/api/analytics', analyticsRoutes);
 app.use('/api/dex', dexRoutes);
 app.use('/api/support', supportRoutes);
 app.use('/api/escrow', agentEscrowRoutes);
+app.use('/api/referrals', referralRoutes);
 app.use('/api/loyalty', loyaltyRoutes);
 app.use('/api/disputes', disputeRoutes);
 app.use('/api/kyc', kycRoutes);
