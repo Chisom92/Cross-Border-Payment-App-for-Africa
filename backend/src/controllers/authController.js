@@ -16,6 +16,8 @@ const {
   refreshTokenExpiresAt,
 } = require('../utils/tokens');
 const { sendOTP } = require('../services/sms');
+const { recordSession } = require('./sessionController');
+const { recordSession } = require('./sessionController');
 
 const TOKEN_TTL_MS = 96 * 60 * 60 * 1000;
 const PASSWORD_RESET_TTL_MS = 60 * 60 * 1000;
@@ -201,6 +203,9 @@ async function login(req, res, next) {
        VALUES ($1, $2, $3, $4)`,
       [uuidv4(), user.id, hash, expiresAt]
     );
+
+    // Record session for remote logout support
+    await recordSession(user.id, token, req).catch(() => {});
 
     res.cookie(COOKIE_NAME, raw, COOKIE_OPTIONS);
     audit.log(user.id, 'login_success', req.ip, req.headers['user-agent']);
