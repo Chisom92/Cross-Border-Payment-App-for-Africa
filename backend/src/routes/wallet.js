@@ -13,12 +13,16 @@ const {
   addSigner,
   removeSigner,
   listSigners,
+  getSignersFromHorizon,
+  clearInflationDestinationHandler,
   listTrustlines,
   addTrustlineHandler,
   removeTrustlineHandler,
   mergeWallet,
+  listDataEntries,
+  setEntry,
+  deleteEntry,
 } = require('../controllers/walletController');
-const { getWallet, getQRCode, getWalletTransactions, exportKey, upgradeToBusinessAccount, addSigner, removeSigner, listSigners, listTrustlines, addTrustlineHandler, removeTrustlineHandler, mergeWallet, listDataEntries, setEntry, deleteEntry } = require('../controllers/walletController');
 const { getContacts, addContact, deleteContact } = require('../controllers/contactsController');
 const { getStatus } = require('../services/horizonRateLimit');
 
@@ -127,6 +131,8 @@ router.post(
 // Multisig / business account routes
 router.post('/upgrade-business', upgradeToBusinessAccount);
 router.get('/signers', listSigners);
+router.get('/signers/horizon', getSignersFromHorizon);
+router.post('/clear-inflation-destination', clearInflationDestinationHandler);
 router.post(
   '/signers',
   [
