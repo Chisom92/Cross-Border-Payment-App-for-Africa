@@ -1,145 +1,79 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
-import * as StellarSdk from '@stellar/stellar-sdk';
+import { io } from 'socket.io-client';
 
-const HORIZON_URL = process.env.REACT_APP_STELLAR_HORIZON_URL || 'https://horizon-testnet.stellar.org';
-const isTestnet = process.env.REACT_APP_STELLAR_NETWORK !== 'mainnet';
-const networkPassphrase = isTestnet
-  ? StellarSdk.Networks.TESTNET
-  : StellarSdk.Networks.PUBLIC;
+const BACKEND_URL = process.env.REACT_APP_API_URL || 'http://localhost:5000';
 
 /**
- * Hook to stream real-time payment notifications from Stellar Horizon
+ * Hook to stream real-time payment events via Socket.IO (backed by Horizon streaming).
+ * Falls back gracefully if the socket cannot connect.
+ *
  * @param {string} publicKey - The account public key to monitor
- * @param {Function} onPayment - Callback when a new payment is detected
- * @returns {Object} { isConnected, error, reconnect }
+ * @param {Function} onPayment - Callback when a payment:received event fires
+ * @returns {{ isConnected: boolean, error: string|null }}
  */
 export function usePaymentStream(publicKey, onPayment) {
   const [isConnected, setIsConnected] = useState(false);
   const [error, setError] = useState(null);
-  const streamRef = useRef(null);
-  const reconnectTimeoutRef = useRef(null);
-  const reconnectAttemptsRef = useRef(0);
-  const maxReconnectAttempts = 5;
-  const baseReconnectDelay = 1000; // 1 second
+  const socketRef = useRef(null);
+  const onPaymentRef = useRef(onPayment);
 
-  const connect = useCallback(() => {
-    if (!publicKey) return;
+  // Keep callback ref fresh without re-connecting
+  useEffect(() => {
+    onPaymentRef.current = onPayment;
+  }, [onPayment]);
 
-    try {
-      const server = new StellarSdk.Horizon.Server(HORIZON_URL);
-      
-      // Close existing stream if any
-      if (streamRef.current) {
-        streamRef.current();
-      }
-
-      streamRef.current = server
-        .payments()
-        .forAccount(publicKey)
-        .cursor('now')
-        .stream({
-          onmessage: (payment) => {
-            // Reset reconnect attempts on successful message
-            reconnectAttemptsRef.current = 0;
-            setError(null);
-            setIsConnected(true);
-            
-            // Call the callback with payment data
-            if (onPayment) {
-              onPayment({
-                id: payment.id,
-                type: payment.type,
-                from: payment.from,
-                to: payment.to,
-                amount: payment.amount,
-                asset: payment.asset_type === 'native' ? 'XLM' : payment.asset_code,
-                createdAt: payment.created_at,
-                transactionHash: payment.transaction_hash,
-              });
-            }
-          },
-          onerror: (err) => {
-            console.error('Payment stream error:', err);
-            setError(err.message || 'Stream error');
-            setIsConnected(false);
-            
-            // Attempt to reconnect with exponential backoff
-            if (reconnectAttemptsRef.current < maxReconnectAttempts) {
-              const delay = baseReconnectDelay * Math.pow(2, reconnectAttemptsRef.current);
-              reconnectAttemptsRef.current += 1;
-              
-              reconnectTimeoutRef.current = setTimeout(() => {
-                connect();
-              }, delay);
-            }
-          },
-          onclose: () => {
-            setIsConnected(false);
-          }
-        });
-
-      setIsConnected(true);
-      setError(null);
-    } catch (err) {
-      console.error('Failed to connect to payment stream:', err);
-      setError(err.message || 'Failed to connect');
-      setIsConnected(false);
-    }
-  }, [publicKey, onPayment]);
-
-  const disconnect = useCallback(() => {
-    if (reconnectTimeoutRef.current) {
-      clearTimeout(reconnectTimeoutRef.current);
-      reconnectTimeoutRef.current = null;
-    }
-    
-    if (streamRef.current) {
-      streamRef.current();
-      streamRef.current = null;
-    }
-    
-    setIsConnected(false);
+  const getToken = useCallback(() => {
+    return localStorage.getItem('token') || sessionStorage.getItem('token') || null;
   }, []);
 
-  const reconnect = useCallback(() => {
-    disconnect();
-    reconnectAttemptsRef.current = 0;
-    connect();
-  }, [connect, disconnect]);
-
-  // Connect on mount and when publicKey changes
   useEffect(() => {
-    if (publicKey) {
-      connect();
-    }
+    if (!publicKey) return;
 
-    return () => {
-      disconnect();
-    };
-  }, [publicKey, connect, disconnect]);
+    const token = getToken();
+    if (!token) return;
 
-  // Handle network interruption
-  useEffect(() => {
-    const handleOnline = () => {
-      if (publicKey && !isConnected) {
-        reconnect();
-      }
-    };
+    const socket = io(BACKEND_URL, {
+      auth: { token },
+      transports: ['websocket'],
+      reconnectionAttempts: 5,
+      reconnectionDelay: 2000,
+    });
 
-    const handleOffline = () => {
+    socketRef.current = socket;
+
+    socket.on('connect', () => {
+      setIsConnected(true);
+      setError(null);
+    });
+
+    socket.on('disconnect', () => {
       setIsConnected(false);
-    };
+    });
 
-    window.addEventListener('online', handleOnline);
-    window.addEventListener('offline', handleOffline);
+    socket.on('connect_error', (err) => {
+      setError(err.message);
+      setIsConnected(false);
+    });
+
+    socket.on('payment:received', (data) => {
+      if (data.to === publicKey && onPaymentRef.current) {
+        onPaymentRef.current(data);
+      }
+    });
+
+    socket.on('payment:confirmed', (data) => {
+      if (data.account === publicKey && onPaymentRef.current) {
+        onPaymentRef.current({ ...data, type: 'confirmed' });
+      }
+    });
 
     return () => {
-      window.removeEventListener('online', handleOnline);
-      window.removeEventListener('offline', handleOffline);
+      socket.disconnect();
+      socketRef.current = null;
     };
-  }, [publicKey, isConnected, reconnect]);
+  }, [publicKey, getToken]);
 
-  return { isConnected, error, reconnect, disconnect };
+  return { isConnected, error };
 }
 
 export default usePaymentStream;
