@@ -490,6 +490,19 @@ export default function SendMoney() {
           ) : null}
         </div>
 
+        {/* Private Note */}
+        <div>
+          <label className="text-sm text-gray-400 mb-1 block">Private note <span className="text-gray-600">(only visible to you)</span></label>
+          <input
+            type="text"
+            maxLength={500}
+            placeholder="Invoice #, project code, personal reminder…"
+            value={form.private_note}
+            onChange={e => setForm({ ...form, private_note: e.target.value })}
+            className="w-full bg-gray-800 border border-gray-700 rounded-xl px-4 py-3 text-white placeholder-gray-500 focus:outline-none focus:border-primary-500 transition-colors"
+          />
+        </div>
+
         {/* Confirmation preview */}
         {confirmed && (
           <div className="bg-yellow-500/10 border border-yellow-500/30 rounded-xl p-4 space-y-2">
