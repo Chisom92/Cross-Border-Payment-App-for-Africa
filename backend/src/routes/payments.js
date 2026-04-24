@@ -5,6 +5,7 @@ const authMiddleware = require('../middleware/auth');
 const idempotency = require('../middleware/idempotency');
 const paymentSendValidators = require('../validators/paymentSendValidators');
 const { send, history, findPath, sendPath, exportCSV, estimateFee } = require('../controllers/paymentController');
+const { send, history, exportCSV, estimateFee, findPath, sendPath } = require('../controllers/paymentController');
 const { resolveFederationAddress } = require('../services/stellar');
 const { isMemoRequired } = require('../services/memoRequired');
 const { ALLOWED_HISTORY_ASSETS } = require('../utils/historyQuery');
@@ -35,6 +36,8 @@ const validate = (req, res, next) => {
   if (!errors.isEmpty()) return res.status(400).json({ errors: errors.array() });
   next();
 };
+
+
 
 router.use(authMiddleware);
 
@@ -73,6 +76,19 @@ router.get(
 router.post(
   '/send',
   paymentSendValidators,
+router.post('/send',
+  [
+    body('recipient_address')
+      .notEmpty().withMessage('Recipient address is required')
+      .custom((value) => {
+        if (!value.includes('*') && !StellarSdk.StrKey.isValidEd25519PublicKey(value)) {
+          throw new Error('Invalid Stellar wallet address or federation address');
+        }
+        return true;
+      }),
+    amountLimits('amount'),
+    body('asset').optional().isIn(['XLM', 'USDC', 'NGN', 'GHS', 'KES']),
+  ],
   validate,
   idempotency,
   send,

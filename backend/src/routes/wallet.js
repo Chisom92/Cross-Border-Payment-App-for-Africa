@@ -18,7 +18,9 @@ const {
   removeTrustlineHandler,
   mergeWallet,
 } = require('../controllers/walletController');
+const { getWallet, getQRCode, getWalletTransactions, exportKey, upgradeToBusinessAccount, addSigner, removeSigner, listSigners, listTrustlines, addTrustlineHandler, removeTrustlineHandler, mergeWallet, listDataEntries, setEntry, deleteEntry } = require('../controllers/walletController');
 const { getContacts, addContact, deleteContact } = require('../controllers/contactsController');
+const { getStatus } = require('../services/horizonRateLimit');
 
 const validate = (req, res, next) => {
   const errors = validationResult(req);
@@ -151,5 +153,18 @@ router.delete(
   validate,
   removeSigner,
 );
+
+// Account data entries (manageData)
+router.get('/data-entries', listDataEntries);
+router.post('/data-entry',
+  [
+    body('key').trim().notEmpty().withMessage('key is required'),
+    body('value').trim().notEmpty().withMessage('value is required')
+      .isLength({ max: 64 }).withMessage('value must be 64 characters or fewer'),
+  ],
+  validate,
+  setEntry
+);
+router.delete('/data-entry/:key', deleteEntry);
 
 module.exports = router;

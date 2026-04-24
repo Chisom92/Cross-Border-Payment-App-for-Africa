@@ -7,6 +7,9 @@ const cache = require("../utils/cache");
 const { checkFraud, logFraudBlock } = require("../services/fraudDetection");
 const { parseHistoryFrom, parseHistoryTo, normalizeAsset } = require("../utils/historyQuery");
 const { isMemoRequired } = require("../services/memoRequired");
+const { awardReferralCredit } = require("./referralController");
+const { mintPoints } = require("../services/loyaltyToken");
+const { depositFee } = require("../services/feeDistributor");
 
 // Configurable KYC transaction threshold in USD equivalent
 const KYC_THRESHOLD_USD = parseFloat(process.env.KYC_THRESHOLD_USD || "100");
@@ -16,6 +19,9 @@ const XLM_USD_RATE = parseFloat(process.env.XLM_USD_RATE || "0.11");
 
 // Daily send limit per user
 const DAILY_SEND_LIMIT = parseFloat(process.env.DAILY_SEND_LIMIT || "50000");
+
+// Threshold for phone verification check
+const PHONE_VERIFICATION_THRESHOLD_USD = parseFloat(process.env.PHONE_VERIFICATION_THRESHOLD_USD || "100");
 
 function estimateUSDValue(amount, asset) {
   if (asset === "USD" || asset === "USDC") return parseFloat(amount);
@@ -55,18 +61,40 @@ async function send(req, res, next) {
   // Hoist these so the catch block can reference them for the failed-tx INSERT
   let public_key;
   try {
-    const { recipient_address, amount, asset = "XLM", memo: rawMemo, memo_type: rawMemoType } = req.body;
-    const memo = typeof rawMemo === "string" ? rawMemo.trim() : "";
+    const { recipient_address, amount, asset = "XLM", memo: rawMemo, memo_type: rawMemoType, encrypt_memo = false } = req.body;
+    let memo = typeof rawMemo === "string" ? rawMemo.trim() : "";
     const memo_type = memo ? (rawMemoType || "text") : null;
+
+    let is_encrypted = false;
+    let encrypted_memo = null;
+
+    if (encrypt_memo && memo) {
+      const { encryptMemo } = require('../utils/encryption');
+      encrypted_memo = encryptMemo(memo, recipient_address);
+      memo = encrypted_memo; // Use ciphertext as memo
+      is_encrypted = true;
+    }
 
     // KYC check for high-value transactions
     const estimatedUSD = estimateUSDValue(amount, asset);
     if (estimatedUSD >= KYC_THRESHOLD_USD) {
       const kycResult = await db.query("SELECT kyc_status FROM users WHERE id = $1", [
+    // Phone verification check for high-value transactions
+    if (estimatedUSD >= PHONE_VERIFICATION_THRESHOLD_USD) {
+      const userResult = await db.query("SELECT kyc_status, phone_verified FROM users WHERE id = $1", [
         req.user.userId,
       ]);
-      const kycStatus = kycResult.rows[0]?.kyc_status || "unverified";
-      if (kycStatus !== "verified") {
+      const { kyc_status: kycStatus, phone_verified: phoneVerified } = userResult.rows[0] || {};
+      
+      if (!phoneVerified) {
+        return res.status(403).json({
+          error: "Phone verification required for transactions above $" + PHONE_VERIFICATION_THRESHOLD_USD + " USD equivalent.",
+          phone_verified: false,
+          code: "PHONE_VERIFICATION_REQUIRED",
+        });
+      }
+
+      if (kycStatus !== "verified" && estimatedUSD >= KYC_THRESHOLD_USD) {
         return res.status(403).json({
           error:
             "KYC verification required for transactions above $" +
@@ -127,24 +155,76 @@ async function send(req, res, next) {
       asset,
       memo: memo || undefined,
       memoType: memo ? memo_type : undefined,
-    });
+    }, req.logger);
 
     // Save to DB
     const txStatus = type === "claimable_balance" ? "pending_claim" : "completed";
     await db.query(
-      `INSERT INTO transactions (id, sender_wallet, recipient_wallet, amount, asset, memo, memo_type, tx_hash, status, claimable_balance_id)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
-      [txId, public_key, recipient_address, amount, asset, memo || null, memo_type, transactionHash, txStatus, claimableBalanceId || null],
+      `INSERT INTO transactions (id, sender_wallet, recipient_wallet, amount, asset, memo, memo_type, tx_hash, status, claimable_balance_id, request_id, is_encrypted, encrypted_memo)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)`,
+      [txId, public_key, recipient_address, amount, asset, memo || null, memo_type, transactionHash, txStatus, claimableBalanceId || null, req.requestId, is_encrypted, encrypted_memo],
     );
 
     // Invalidate sender's cached balance — it changed after this payment
     await cache.del(`balance:${public_key}`);
+
+    // Award referral credit to referrer if this is the sender's first transaction
+    const txCount = await db.query(
+      `SELECT COUNT(*) AS cnt FROM transactions WHERE sender_wallet = $1`,
+      [public_key]
+    );
+    if (parseInt(txCount.rows[0].cnt, 10) === 1) {
+      awardReferralCredit(req.user.userId).catch(() => {});
+    // Mint loyalty points: 1 point per 1 XLM (or XLM-equivalent) of volume
+    const loyaltyPoints = Math.max(1, Math.floor(parseFloat(amount)));
+    mintPoints({ recipientWallet: public_key, points: loyaltyPoints }).catch(() => {});
+    // Deposit platform fee on-chain (fire-and-forget — never blocks the response)
+    const FEE_BPS = parseInt(process.env.PLATFORM_FEE_BPS || "250", 10);
+    if (asset === "USDC" && FEE_BPS > 0) {
+      const feeStroops = Math.floor(parseFloat(amount) * 1e7 * FEE_BPS / 10000);
+      if (feeStroops > 0) {
+        depositFee(feeStroops).catch((err) =>
+          console.error("Fee deposit failed (non-critical):", err.message)
+        );
+      }
+    }
 
     const txData = { id: txId, tx_hash: transactionHash, ledger, amount, asset, sender: public_key, recipient: recipient_address, type };
     webhook.deliver("payment.sent", txData).catch(() => {});
     if (type !== "claimable_balance") {
       webhook.deliver("payment.received", txData).catch(() => {});
     }
+
+    // Fire transaction receipt emails asynchronously — do not block the response
+    const emailTxData = {
+      amount,
+      asset,
+      senderAddress: public_key,
+      recipientAddress: recipient_address,
+      memo: memo || null,
+      txHash: transactionHash,
+    };
+
+    // Email the sender
+    db.query('SELECT email FROM users WHERE id = $1', [req.user.userId])
+      .then(({ rows }) => {
+        if (rows[0]?.email) {
+          return sendTransactionEmail(rows[0].email, 'sent', emailTxData);
+        }
+      })
+      .catch((err) => logger.warn('Failed to send payment-sent email', { error: err.message }));
+
+    // Email the recipient if they are a registered AfriPay user
+    db.query(
+      'SELECT u.email FROM users u JOIN wallets w ON w.user_id = u.id WHERE w.public_key = $1',
+      [recipient_address]
+    )
+      .then(({ rows }) => {
+        if (rows[0]?.email) {
+          return sendTransactionEmail(rows[0].email, 'received', emailTxData);
+        }
+      })
+      .catch((err) => logger.warn('Failed to send payment-received email', { error: err.message }));
 
     res.json({
       message: type === "claimable_balance" ? "Claimable balance created" : "Payment sent successfully",
@@ -292,7 +372,19 @@ async function sendPath(req, res, next) {
       destination_min_amount,
       path = [],
       memo,
+      encrypt_memo = false,
     } = req.body);
+
+    let memoStr = typeof memo === "string" ? memo.trim() : "";
+    let is_encrypted = false;
+    let encrypted_memo = null;
+
+    if (encrypt_memo && memoStr) {
+      const { encryptMemo } = require('../utils/encryption');
+      encrypted_memo = encryptMemo(memoStr, recipient_address);
+      memoStr = encrypted_memo; // Use ciphertext as memo
+      is_encrypted = true;
+    }
 
     // KYC check
     const estimatedUSD = estimateUSDValue(source_amount, source_asset);
@@ -300,6 +392,20 @@ async function sendPath(req, res, next) {
       const kycResult = await db.query("SELECT kyc_status FROM users WHERE id = $1", [req.user.userId]);
       const kycStatus = kycResult.rows[0]?.kyc_status || "unverified";
       if (kycStatus !== "verified") {
+    // Phone verification check
+    if (estimatedUSD >= PHONE_VERIFICATION_THRESHOLD_USD) {
+      const userResult = await db.query("SELECT kyc_status, phone_verified FROM users WHERE id = $1", [req.user.userId]);
+      const { kyc_status: kycStatus, phone_verified: phoneVerified } = userResult.rows[0] || {};
+      
+      if (!phoneVerified) {
+        return res.status(403).json({
+          error: `Phone verification required for transactions above $${PHONE_VERIFICATION_THRESHOLD_USD} USD equivalent.`,
+          phone_verified: false,
+          code: "PHONE_VERIFICATION_REQUIRED",
+        });
+      }
+
+      if (kycStatus !== "verified" && estimatedUSD >= KYC_THRESHOLD_USD) {
         return res.status(403).json({
           error: `KYC verification required for transactions above $${KYC_THRESHOLD_USD} USD equivalent.`,
           kyc_status: kycStatus,
@@ -337,13 +443,13 @@ async function sendPath(req, res, next) {
       destinationAsset: destination_asset,
       destinationMinAmount: destination_min_amount,
       path,
-      memo,
-    });
+      memo: memoStr,
+    }, req.logger);
 
     await db.query(
-      `INSERT INTO transactions (id, sender_wallet, recipient_wallet, amount, asset, memo, tx_hash, status)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,'completed')`,
-      [txId, public_key, recipient_address, source_amount, source_asset, memo || null, transactionHash],
+      `INSERT INTO transactions (id, sender_wallet, recipient_wallet, amount, asset, memo, tx_hash, status, request_id, is_encrypted, encrypted_memo)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,'completed',$8,$9,$10)`,
+      [txId, public_key, recipient_address, source_amount, source_asset, memoStr || null, transactionHash, req.requestId, is_encrypted, encrypted_memo],
     );
 
     const txData = { id: txId, tx_hash: transactionHash, ledger, source_amount, source_asset, destination_asset, sender: public_key, recipient: recipient_address };
@@ -356,9 +462,9 @@ async function sendPath(req, res, next) {
     });
   } catch (err) {
     await db.query(
-      `INSERT INTO transactions (id, sender_wallet, recipient_wallet, amount, asset, memo, tx_hash, status)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,'failed')`,
-      [txId, public_key || "", recipient_address || "", source_amount || "0", source_asset || "XLM", null, null],
+      `INSERT INTO transactions (id, sender_wallet, recipient_wallet, amount, asset, memo, tx_hash, status, request_id, is_encrypted, encrypted_memo)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,'failed',$8,$9,$10)`,
+      [txId, public_key || "", recipient_address || "", source_amount || "0", source_asset || "XLM", null, null, req.requestId, false, null],
     ).catch(() => {});
 
     if (err.status === 400 || err.status === 500) {
