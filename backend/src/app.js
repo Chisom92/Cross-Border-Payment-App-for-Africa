@@ -39,6 +39,10 @@ const { runHealthChecks } = require('./services/health');
 const app = express();
 
 app.use(requestId);
+app.use((req, res, next) => {
+  req.logger = logger.child({ requestId: req.requestId });
+  next();
+});
 app.use(metricsMiddleware);
 app.use(cookieParser());
 app.use(helmet({
@@ -177,7 +181,7 @@ app.get('/metrics', async (req, res) => {
 });
 
 app.use((err, req, res, next) => {
-  logger.error(err.message, { requestId: req.requestId, stack: err.stack, status: err.status });
+  req.logger.error(err.message, { stack: err.stack, status: err.status });
   res.status(err.status || 500).json({ error: err.message || 'Internal server error' });
 });
 

@@ -44,6 +44,7 @@ function isNetworkError(err) {
  * Execute fn(server) with automatic failover to the fallback node on network errors only.
  * Records Horizon call duration via Prometheus.
  */
+async function withFallback(fn, logger = require('../utils/logger')) {
 async function withFallback(fn, operation = 'unknown') {
   const end = horizonRequestDuration.startTimer({ operation });
   try {
@@ -255,11 +256,16 @@ async function createClaimableBalance({
   amount,
   asset = 'XLM',
   memo,
-  memoType = 'text'
+  memoType = 'text',
+  logger = require('../utils/logger')
 }) {
   const assetObj = resolveAsset(asset);
   const secretKey = decryptPrivateKey(encryptedSecretKey);
   const senderKeypair = StellarSdk.Keypair.fromSecret(secretKey);
+  const senderAccount = await withRetry(() => withFallback(s => s.loadAccount(senderPublicKey), logger), { label: 'loadAccount(sender)' });
+
+  const txBuilder = new StellarSdk.TransactionBuilder(senderAccount, {
+    fee: await withRetry(() => withFallback(s => s.fetchBaseFee(), logger), { label: 'fetchBaseFee' }),
   const senderAccount = validateHorizonResponse(
     AccountResponseSchema,
     await withRetry(() => withFallback(s => s.loadAccount(senderPublicKey)), { label: 'loadAccount(sender)' }),
@@ -286,6 +292,7 @@ async function createClaimableBalance({
   const transaction = txBuilder.build();
   transaction.sign(senderKeypair);
 
+  const result = await withRetry(() => withFallback(s => s.submitTransaction(transaction), logger), { label: 'submitTransaction' });
   const rawResult = await withRetry(() => withFallback(s => s.submitTransaction(transaction)), { label: 'submitTransaction' });
   const result = validateHorizonResponse(TransactionSubmitResponseSchema, rawResult, 'submitTransaction(claimableBalance)');
   const result = await withRetry(() => withFallback(s => s.submitTransaction(transaction), 'submitTransaction'), { label: 'submitTransaction' });
@@ -302,8 +309,8 @@ function isBadSeq(err) {
   return err.response?.data?.extras?.result_codes?.transaction === 'tx_bad_seq';
 }
 
-async function sendPayment(params) {
-  return enqueue(params.senderPublicKey, () => _sendPaymentOnce(params));
+async function sendPayment(params, logger = require('../utils/logger')) {
+  return enqueue(params.senderPublicKey, () => _sendPaymentOnce(params, logger));
 }
 
 async function _sendPaymentOnce({
@@ -314,7 +321,7 @@ async function _sendPaymentOnce({
   asset = 'XLM',
   memo,
   memoType = 'text'
-}) {
+}, logger) {
   const assetObj = resolveAsset(asset);
 
   if (asset !== 'XLM') {
@@ -328,6 +335,10 @@ async function _sendPaymentOnce({
   for (let attempt = 0; attempt < MAX_SEQ_RETRIES; attempt++) {
     try {
       // Fetch a fresh sequence number on every attempt
+      const senderAccount = await withFallback(s => s.loadAccount(senderPublicKey), logger);
+
+      const txBuilder = new StellarSdk.TransactionBuilder(senderAccount, {
+        fee: await withFallback(s => s.fetchBaseFee(), logger),
       const senderAccount = validateHorizonResponse(
         AccountResponseSchema,
         await withFallback(s => s.loadAccount(senderPublicKey)),
@@ -352,6 +363,7 @@ async function _sendPaymentOnce({
       const transaction = txBuilder.build();
       transaction.sign(senderKeypair);
 
+      const result = await withFallback(s => s.submitTransaction(transaction), logger);
       const rawResult = await withFallback(s => s.submitTransaction(transaction));
       const result = validateHorizonResponse(TransactionSubmitResponseSchema, rawResult, 'submitTransaction(payment)');
       const result = await withFallback(s => s.submitTransaction(transaction), 'submitTransaction');
@@ -370,7 +382,7 @@ async function _sendPaymentOnce({
       if (err.response?.status === 400 && err.response?.data?.extras?.result_codes?.transaction === 'tx_failed') {
         logger.info('Account not found, creating claimable balance', { recipient: recipientPublicKey });
         const result = await createClaimableBalance({
-          senderPublicKey, encryptedSecretKey, recipientPublicKey, amount, asset, memo, memoType
+          senderPublicKey, encryptedSecretKey, recipientPublicKey, amount, asset, memo, memoType, logger
         });
         return { ...result, type: 'claimable_balance' };
       }
@@ -457,7 +469,7 @@ async function sendPathPayment({
   destinationMinAmount,
   path = [],
   memo,
-}) {
+}, logger = require('../utils/logger')) {
   const srcAsset = resolveAsset(sourceAsset);
   const dstAsset = resolveAsset(destinationAsset);
 
@@ -467,6 +479,7 @@ async function sendPathPayment({
 
   const secretKey = decryptPrivateKey(encryptedSecretKey);
   const senderKeypair = StellarSdk.Keypair.fromSecret(secretKey);
+  const senderAccount = await withFallback(s => s.loadAccount(senderPublicKey), logger);
   const senderAccount = validateHorizonResponse(
     AccountResponseSchema,
     await withFallback(s => s.loadAccount(senderPublicKey)),
@@ -481,6 +494,7 @@ async function sendPathPayment({
   );
 
   const txBuilder = new StellarSdk.TransactionBuilder(senderAccount, {
+    fee: await withFallback(s => s.fetchBaseFee(), logger),
     fee: await withFallback(s => s.fetchBaseFee(), 'fetchBaseFee'),
     networkPassphrase
   })
@@ -499,6 +513,7 @@ async function sendPathPayment({
   const transaction = txBuilder.build();
   transaction.sign(senderKeypair);
 
+  const result = await withFallback(s => s.submitTransaction(transaction), logger);
   const rawResult = await withFallback(s => s.submitTransaction(transaction));
   const result = validateHorizonResponse(TransactionSubmitResponseSchema, rawResult, 'submitTransaction(pathPayment)');
   const result = await withFallback(s => s.submitTransaction(transaction), 'submitTransaction');
