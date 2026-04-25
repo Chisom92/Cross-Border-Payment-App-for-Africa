@@ -17,8 +17,9 @@ const STATUS_COLORS = {
 
 const ASSET_OPTIONS = ['XLM', 'USDC', 'NGN', 'GHS', 'KES'];
 
-function buildHistoryParams(pageNum, dateFrom, dateTo, asset) {
-  const params = { page: pageNum, limit: 20 };
+function buildHistoryParams(cursor, dateFrom, dateTo, asset) {
+  const params = { limit: 20 };
+  if (cursor) params.cursor = cursor;
   if (dateFrom) params.from = dateFrom;
   if (dateTo) params.to = dateTo;
   if (asset) params.asset = asset;
@@ -33,7 +34,7 @@ export default function TransactionHistory() {
   const [loading, setLoading] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
   const [filter, setFilter] = useState('all');
-  const [page, setPage] = useState(1);
+  const [nextCursor, setNextCursor] = useState(null);
   const [hasMore, setHasMore] = useState(false);
   const [error, setError] = useState(null);
   const [fromCache, setFromCache] = useState(false);
@@ -50,7 +51,7 @@ export default function TransactionHistory() {
   const fetchInitial = useCallback(async () => {
     setLoading(true);
     setError(null);
-    setPage(1);
+    setNextCursor(null);
 
     // Offline — serve from IndexedDB cache
     if (!navigator.onLine) {
@@ -75,12 +76,12 @@ export default function TransactionHistory() {
 
     // Online — fetch fresh and persist
     try {
-      const params = buildHistoryParams(1, dateFrom, dateTo, asset);
+      const params = buildHistoryParams(null, dateFrom, dateTo, asset);
       const r = await api.get('/payments/history', { params });
       const txList = r.data.transactions;
       setTransactions(txList);
-      setHasMore(r.data.page < r.data.pages);
-      setPage(1);
+      setHasMore(r.data.has_more);
+      setNextCursor(r.data.next_cursor || null);
       setFromCache(false);
 
       // Only cache the unfiltered first page (no date/asset filters)
@@ -115,15 +116,15 @@ export default function TransactionHistory() {
   }, [fetchInitial]);
 
   const loadMore = () => {
-    const nextPage = page + 1;
+    if (!nextCursor) return;
     setLoadingMore(true);
-    const params = buildHistoryParams(nextPage, dateFrom, dateTo, asset);
+    const params = buildHistoryParams(nextCursor, dateFrom, dateTo, asset);
     api
       .get('/payments/history', { params })
       .then((r) => {
         setTransactions((prev) => [...prev, ...r.data.transactions]);
-        setPage(nextPage);
-        setHasMore(nextPage < r.data.pages);
+        setHasMore(r.data.has_more);
+        setNextCursor(r.data.next_cursor || null);
       })
       .catch(() => {})
       .finally(() => setLoadingMore(false));
