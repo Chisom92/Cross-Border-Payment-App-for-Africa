@@ -12,6 +12,7 @@ const db = require('./db');
 const app = require('./app');
 const { initStreams } = require('./services/horizonWorker');
 const { detectTestnetReset } = require('./services/stellar');
+const { syncOfferEvents } = require('./jobs/syncOfferEvents');
 
 const PORT = process.env.PORT || 5000;
 const SHUTDOWN_TIMEOUT_MS = 30_000;
@@ -28,6 +29,13 @@ const server = app.listen(PORT, () => {
       }
     }).catch(() => {});
   }
+  // Sync DEX offer events every 2 minutes
+  const OFFER_SYNC_INTERVAL_MS = parseInt(process.env.OFFER_SYNC_INTERVAL_MS || '120000', 10);
+  setInterval(() => {
+    syncOfferEvents().catch((err) =>
+      logger.warn('syncOfferEvents interval error', { error: err.message })
+    );
+  }, OFFER_SYNC_INTERVAL_MS);
 });
 
 async function shutdown(signal) {
