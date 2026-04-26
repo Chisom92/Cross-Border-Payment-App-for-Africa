@@ -39,6 +39,8 @@ export default function SendMoney() {
   const [loading, setLoading] = useState(false);
   const [confirmed, setConfirmed] = useState(false);
   const [feeXLM, setFeeXLM] = useState(null);
+  const [contractSimData, setContractSimData] = useState(null);
+  const [contractSimLoading, setContractSimLoading] = useState(false);
   const [requestId] = useState(searchParams.get('request'));
   const [keyboardOpen, setKeyboardOpen] = useState(false);
   const { currencies, convertFromXLM, usingApproximateRates } = useExchangeRates();
@@ -74,7 +76,7 @@ export default function SendMoney() {
     parseFloat(form.amount) > availableXlm;
 
   useEffect(() => {
-    api.get('/payments/fee-stats').then((r) => setFeeStats(r.data)).catch(() => {});
+    api.get('/payments/fee-stats').then((r) => setFeeStats(r.data)).catch(() => { });
   }, []);
 
   useEffect(() => {
@@ -85,11 +87,11 @@ export default function SendMoney() {
         const def = r.data.wallets.find((w) => w.is_default) || r.data.wallets[0];
         setSelectedWalletId(def.id);
       }
-    }).catch(() => {});
+    }).catch(() => { });
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
-    api.get('/wallet/contacts').then(r => setContacts(r.data.contacts || [])).catch(() => {});
+    api.get('/wallet/contacts').then(r => setContacts(r.data.contacts || [])).catch(() => { });
   }, []);
 
   // Filter contacts based on search term
@@ -245,6 +247,34 @@ export default function SendMoney() {
       } catch {
         setFeeXLM(null);
       }
+
+      if (form.recipient_address.startsWith('C')) {
+        setContractSimLoading(true);
+        setContractSimData(null);
+        try {
+          const payload = {
+            recipient_address: form.recipient_address,
+            amount: parseFloat(form.amount),
+            asset: form.asset,
+            wallet_id: selectedWallet?.id || undefined,
+            fee_priority: form.fee_priority,
+          };
+          if (form.memo) {
+            payload.memo = form.memo;
+            payload.memo_type = form.memo_type;
+          }
+          const buildRes = await api.post('/payments/build', payload);
+          if (buildRes.data.xdr) {
+            const simRes = await api.post('/contracts/simulate', { transaction: buildRes.data.xdr });
+            setContractSimData(simRes.data);
+          }
+        } catch (simErr) {
+          setContractSimData({ error: simErr.response?.data?.error || simErr.message });
+        } finally {
+          setContractSimLoading(false);
+        }
+      }
+
       setConfirmed(true);
       return;
     }
@@ -314,44 +344,24 @@ export default function SendMoney() {
           });
         } else {
           res = await api.post('/payments/send-path', {
-          recipient_address: form.recipient_address,
-          source_asset: form.asset,
-          source_amount: parseFloat(form.amount),
-          destination_asset: form.destination_asset,
-          destination_min_amount: parseFloat(destMin),
-          path: pathResult.path,
-          memo: form.memo || undefined,
-          wallet_id: selectedWallet?.id || undefined,
-        });
+            recipient_address: form.recipient_address,
+            source_asset: form.asset,
+            source_amount: parseFloat(form.amount),
+            destination_asset: form.destination_asset,
+            destination_min_amount: parseFloat(destMin),
+            path: pathResult.path,
+            memo: form.memo || undefined,
+            wallet_id: selectedWallet?.id || undefined,
+          });
         }
         toast.success(t('send.success'));
         if (requestId) {
           await api.post(`/payment-requests/${requestId}/claim`, {
             txHash: res.data.transaction.tx_hash
-          }).catch(() => {});
+          }).catch(() => { });
         }
         navigate('/dashboard');
       } else {
-        const payload = {
-          recipient_address: form.recipient_address,
-          amount: parseFloat(form.amount),
-          asset: form.asset,
-        };
-        if (form.memo.trim()) {
-          payload.memo = form.memo.trim();
-          payload.memo_type = form.memo_type;
-        }
-        const res = await api.post('/payments/send', payload);
-
-        if (requestId) {
-          await api.post(`/payment-requests/${requestId}/claim`, {
-            txHash: res.data.transaction.tx_hash
-          }).catch(() => {});
-        }
-
-        toast.success(t('send.success'));
-        navigate('/dashboard');
-      }
         const m = form.memo.trim();
         let recipientAddress = form.recipient_address;
 
@@ -386,7 +396,7 @@ export default function SendMoney() {
       if (requestId) {
         await api.post(`/payment-requests/${requestId}/claim`, {
           txHash: res.data?.transaction?.tx_hash,
-        }).catch(() => {});
+        }).catch(() => { });
       }
 
       toast.success(t('send.success'));
@@ -453,11 +463,10 @@ export default function SendMoney() {
                           setSelectedWalletId(w.id);
                           setShowWalletDropdown(false);
                         }}
-                        className={`w-full flex items-center justify-between px-4 py-3 text-left transition-colors ${
-                          w.id === selectedWalletId
-                            ? 'bg-primary-500/20 text-primary-400'
-                            : 'hover:bg-gray-700 text-white'
-                        }`}
+                        className={`w-full flex items-center justify-between px-4 py-3 text-left transition-colors ${w.id === selectedWalletId
+                          ? 'bg-primary-500/20 text-primary-400'
+                          : 'hover:bg-gray-700 text-white'
+                          }`}
                       >
                         <div>
                           <p className="text-sm font-medium">{w.label}</p>
@@ -521,7 +530,7 @@ export default function SendMoney() {
                   aria-label="Search contacts"
                 />
               </div>
-              
+
               {/* Contact list */}
               <div ref={contactListRef} className="max-h-60 overflow-y-auto">
                 {filteredContacts.length > 0 ? (
@@ -539,11 +548,10 @@ export default function SendMoney() {
                         setShowContacts(false);
                         setContactSearch('');
                       }}
-                      className={`w-full px-4 py-2.5 text-left transition-colors ${
-                        index === selectedContactIndex
-                          ? 'bg-primary-500/20 text-primary-400'
-                          : 'hover:bg-gray-700'
-                      }`}
+                      className={`w-full px-4 py-2.5 text-left transition-colors ${index === selectedContactIndex
+                        ? 'bg-primary-500/20 text-primary-400'
+                        : 'hover:bg-gray-700'
+                        }`}
                     >
                       <p className="text-sm text-white">{c.name}</p>
                       <p className="text-xs text-gray-500 font-mono">{c.wallet_address.slice(0, 20)}...</p>
@@ -677,11 +685,10 @@ export default function SendMoney() {
                         key={s}
                         type="button"
                         onClick={() => setForm({ ...form, slippage: s })}
-                        className={`text-xs px-2 py-0.5 rounded-full border transition-colors ${
-                          form.slippage === s
-                            ? 'border-primary-500 text-primary-400'
-                            : 'border-gray-600 text-gray-400 hover:border-gray-400'
-                        }`}
+                        className={`text-xs px-2 py-0.5 rounded-full border transition-colors ${form.slippage === s
+                          ? 'border-primary-500 text-primary-400'
+                          : 'border-gray-600 text-gray-400 hover:border-gray-400'
+                          }`}
                       >
                         {s}%
                       </button>
@@ -705,11 +712,10 @@ export default function SendMoney() {
                         key={s}
                         type="button"
                         onClick={() => setForm({ ...form, slippage: s })}
-                        className={`text-xs px-2 py-0.5 rounded-full border transition-colors ${
-                          form.slippage === s
-                            ? 'border-primary-500 text-primary-400'
-                            : 'border-gray-600 text-gray-400 hover:border-gray-400'
-                        }`}
+                        className={`text-xs px-2 py-0.5 rounded-full border transition-colors ${form.slippage === s
+                          ? 'border-primary-500 text-primary-400'
+                          : 'border-gray-600 text-gray-400 hover:border-gray-400'
+                          }`}
                       >
                         {s}%
                       </button>
@@ -740,11 +746,10 @@ export default function SendMoney() {
                 key={key}
                 type="button"
                 onClick={() => setForm({ ...form, fee_priority: key })}
-                className={`flex-1 rounded-xl border py-2 px-2 text-center transition-colors ${
-                  form.fee_priority === key
-                    ? 'border-primary-500 bg-primary-500/10 text-primary-400'
-                    : 'border-gray-700 bg-gray-800 text-gray-400 hover:border-gray-500'
-                }`}
+                className={`flex-1 rounded-xl border py-2 px-2 text-center transition-colors ${form.fee_priority === key
+                  ? 'border-primary-500 bg-primary-500/10 text-primary-400'
+                  : 'border-gray-700 bg-gray-800 text-gray-400 hover:border-gray-500'
+                  }`}
               >
                 <p className="text-xs font-semibold">{label}</p>
                 <p className="text-xs text-gray-500">{desc}</p>
@@ -813,6 +818,21 @@ export default function SendMoney() {
               {feeXLM && (
                 <>
                   <p>{t('send.confirm_fee', 'Network fee:')} <span className="text-white">{feeXLM} XLM</span></p>
+                  {form.recipient_address.startsWith('C') && (
+                    <div className="mt-4 p-3 bg-gray-800 rounded-lg text-sm border border-gray-700">
+                      <p className="text-gray-400 font-semibold mb-1">Contract Simulation</p>
+                      {contractSimLoading ? (
+                        <p className="text-gray-500 animate-pulse">Simulating...</p>
+                      ) : contractSimData?.error ? (
+                        <p className="text-red-400 font-mono text-xs">{contractSimData.error}</p>
+                      ) : contractSimData ? (
+                        <div className="font-mono text-xs text-gray-300">
+                          <p>Fee: {contractSimData.fee || 'N/A'}</p>
+                          <p>Results: {contractSimData.results?.length ? 'Yes' : 'No'}</p>
+                        </div>
+                      ) : null}
+                    </div>
+                  )}
                   {form.asset === 'XLM' && (
                     <p className="text-yellow-300 font-semibold">
                       {t('send.confirm_total', 'Total:')} {(parseFloat(form.amount) + parseFloat(feeXLM)).toFixed(7)} XLM
@@ -846,11 +866,10 @@ export default function SendMoney() {
           ref={submitButtonRef}
           type="submit"
           disabled={loading || (isCrossAsset && !pathResult) || (memoRequired && !form.memo.trim())}
-          className={`w-full font-semibold py-3.5 rounded-xl flex items-center justify-center gap-2 transition-colors ${
-            confirmed
-              ? 'bg-yellow-500 hover:bg-yellow-600 text-black'
-              : 'bg-primary-500 hover:bg-primary-600 text-white'
-          } disabled:opacity-50`}
+          className={`w-full font-semibold py-3.5 rounded-xl flex items-center justify-center gap-2 transition-colors ${confirmed
+            ? 'bg-yellow-500 hover:bg-yellow-600 text-black'
+            : 'bg-primary-500 hover:bg-primary-600 text-white'
+            } disabled:opacity-50`}
         >
           {loading ? (
             <div className="w-5 h-5 border-2 border-current border-t-transparent rounded-full animate-spin" role="status" aria-label="Loading" />

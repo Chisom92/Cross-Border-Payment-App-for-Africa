@@ -21,14 +21,14 @@ async function getStats(req, res, next) {
 
 async function getUsers(req, res, next) {
   try {
-    const page  = Math.max(1, parseInt(req.query.page)  || 1);
+    const page = Math.max(1, parseInt(req.query.page) || 1);
     const limit = Math.min(100, parseInt(req.query.limit) || 20);
     const offset = (page - 1) * limit;
     const search = req.query.search ? `%${req.query.search}%` : null;
 
     const params = search ? [search, search, limit, offset] : [limit, offset];
-    const where  = search ? `WHERE u.full_name ILIKE $1 OR u.email ILIKE $2` : '';
-    const lIdx   = search ? 3 : 1;
+    const where = search ? `WHERE u.full_name ILIKE $1 OR u.email ILIKE $2` : '';
+    const lIdx = search ? 3 : 1;
 
     const { rows } = await db.query(
       `SELECT u.id, u.full_name, u.email, u.phone, u.role, u.created_at, w.public_key
@@ -40,7 +40,7 @@ async function getUsers(req, res, next) {
     );
 
     const countParams = search ? [search, search] : [];
-    const countWhere  = search ? `WHERE full_name ILIKE $1 OR email ILIKE $2` : '';
+    const countWhere = search ? `WHERE full_name ILIKE $1 OR email ILIKE $2` : '';
     const { rows: countRows } = await db.query(
       `SELECT COUNT(*) FROM users ${countWhere}`,
       countParams
@@ -54,18 +54,18 @@ async function getUsers(req, res, next) {
 
 async function getTransactions(req, res, next) {
   try {
-    const page   = Math.max(1, parseInt(req.query.page)  || 1);
-    const limit  = Math.min(100, parseInt(req.query.limit) || 20);
+    const page = Math.max(1, parseInt(req.query.page) || 1);
+    const limit = Math.min(100, parseInt(req.query.limit) || 20);
     const offset = (page - 1) * limit;
     const { status, asset, from, to } = req.query;
 
     const conditions = [];
-    const params     = [];
+    const params = [];
 
-    if (status) { params.push(status);  conditions.push(`status = $${params.length}`); }
-    if (asset)  { params.push(asset);   conditions.push(`asset = $${params.length}`); }
-    if (from)   { params.push(from);    conditions.push(`created_at >= $${params.length}`); }
-    if (to)     { params.push(to);      conditions.push(`created_at <= $${params.length}`); }
+    if (status) { params.push(status); conditions.push(`status = $${params.length}`); }
+    if (asset) { params.push(asset); conditions.push(`asset = $${params.length}`); }
+    if (from) { params.push(from); conditions.push(`created_at >= $${params.length}`); }
+    if (to) { params.push(to); conditions.push(`created_at <= $${params.length}`); }
 
     const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
 
@@ -88,8 +88,6 @@ async function getTransactions(req, res, next) {
     next(err);
   }
 }
-
-module.exports = { getStats, getUsers, getTransactions, clawback };
 
 /**
  * POST /api/admin/clawback
@@ -133,6 +131,10 @@ async function clawback(req, res, next) {
     next(err);
   }
 }
+
+module.exports = { getStats, getUsers, getTransactions, clawback };
+
+
 
 const { attestKyc, revokeKyc } = require('../services/kycAttestation');
 
