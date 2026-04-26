@@ -22,6 +22,7 @@ import Swap from "./pages/Swap";
 import BatchPayment from "./pages/BatchPayment";
 import Webhooks from "./pages/Webhooks";
 import Referrals from "./pages/Referrals";
+import Sessions from "./pages/Sessions";
 import Layout from "./components/Layout";
 import ErrorBoundary from "./components/ErrorBoundary";
 
@@ -117,6 +118,7 @@ export default function App() {
                 <Route path="history" element={<TransactionHistory />} />
                 <Route path="analytics" element={<Analytics />} />
                 <Route path="profile" element={<Profile />} />
+                <Route path="sessions" element={<Sessions />} />
                 <Route path="kyc" element={<KYCVerification />} />
                 <Route path="webhooks" element={<Webhooks />} />
                 <Route path="business" element={<BusinessSettings />} />

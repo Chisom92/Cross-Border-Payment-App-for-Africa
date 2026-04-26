@@ -114,4 +114,11 @@ router.post('/2fa/disable',
   disable2FA
 );
 
+const { listSessions, revokeSession, revokeAllSessions } = require('../controllers/sessionController');
+
 module.exports = router;
+
+// Session management routes (all require auth)
+router.get('/sessions', authMiddleware, listSessions);
+router.delete('/sessions', authMiddleware, revokeAllSessions);
+router.delete('/sessions/:id', authMiddleware, revokeSession);
