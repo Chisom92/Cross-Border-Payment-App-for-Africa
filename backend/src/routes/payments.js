@@ -11,6 +11,7 @@ const {
   history,
   exportCSV,
   estimateFee,
+  getFeeStats,
   findPath,
   sendPath,
   findReceivePathHandler,
@@ -67,6 +68,7 @@ const validate = (req, res, next) => {
 router.use(authMiddleware);
 
 router.get("/estimate-fee", estimateFee);
+router.get("/fee-stats", getFeeStats);
 
 router.post("/send", paymentSendValidators, validate, idempotency, send);
 router.post("/batch", paymentBatchValidators, validate, idempotency, sendBatch);
