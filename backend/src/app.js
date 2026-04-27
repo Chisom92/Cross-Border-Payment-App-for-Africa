@@ -3,6 +3,7 @@ const cors = require('cors');
 const helmet = require('helmet');
 const rateLimit = require('express-rate-limit');
 const cookieParser = require('cookie-parser');
+const Sentry = require('@sentry/node');
 
 const requestId = require('./middleware/requestId');
 const metricsMiddleware = require('./middleware/metricsMiddleware');
@@ -17,6 +18,8 @@ const anchorRoutes = require('./routes/anchor');
 const kycRoutes = require('./routes/kyc');
 const adminRoutes = require('./routes/admin');
 const webhookRoutes = require('./routes/webhooks');
+const toolsRoutes = require('./routes/tools');
+const assetsRoutes = require('./routes/assets');
 const notificationRoutes = require('./routes/notifications');
 const sep10Routes = require('./routes/sep10');
 const sep31Routes = require('./routes/sep31');
@@ -29,6 +32,10 @@ const agentEscrowRoutes = require('./routes/agentEscrow');
 const referralRoutes = require('./routes/referrals');
 const loyaltyRoutes = require('./routes/loyalty');
 const disputeRoutes = require('./routes/disputes');
+const pricesRoutes = require('./routes/prices');
+const channelsRoutes = require('./routes/channels');
+const contractsRoutes = require('./routes/contracts');
+const ipAllowlist = require('./middleware/ipAllowlist');
 
 const swaggerJsdoc = require('swagger-jsdoc');
 const swaggerUi = require('swagger-ui-express');
@@ -38,6 +45,7 @@ const { runHealthChecks } = require('./services/health');
 
 const app = express();
 
+app.use(Sentry.Handlers.requestHandler());
 app.use(requestId);
 app.use((req, res, next) => {
   req.logger = logger.child({ requestId: req.requestId });
@@ -90,8 +98,13 @@ app.use('/api/referrals', referralRoutes);
 app.use('/api/loyalty', loyaltyRoutes);
 app.use('/api/disputes', disputeRoutes);
 app.use('/api/kyc', kycRoutes);
-app.use('/api/admin', adminRoutes);
+app.use('/api/admin', ipAllowlist, adminRoutes);
+app.use('/api/prices', pricesRoutes);
+app.use('/api/channels', channelsRoutes);
+app.use('/api/contracts', contractsRoutes);
 app.use('/api/webhooks', webhookRoutes);
+app.use('/api/dev', toolsRoutes);
+app.use('/api/assets', assetsRoutes);
 app.use('/api/notifications', notificationRoutes);
 app.use('/.well-known/stellar', sep10Routes);
 app.use('/api/sep31', sep31Routes);
@@ -179,6 +192,8 @@ app.get('/metrics', async (req, res) => {
   res.set('Content-Type', registry.contentType);
   res.end(await registry.metrics());
 });
+
+app.use(Sentry.Handlers.errorHandler());
 
 app.use((err, req, res, next) => {
   req.logger.error(err.message, { stack: err.stack, status: err.status });

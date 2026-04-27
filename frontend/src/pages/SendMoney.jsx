@@ -1,3 +1,6 @@
+import React, { useState, useEffect } from 'react';
+import { useNavigate } from 'react-router-dom';
+import { ArrowLeft, Send, ChevronDown, Users, Camera, Code } from 'lucide-react';
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { ArrowLeft, Send, ChevronDown, Users, Camera, ArrowRightLeft, Wallet } from 'lucide-react';
@@ -7,6 +10,8 @@ import toast from 'react-hot-toast';
 import { useTranslation } from 'react-i18next';
 import QRScanner from '../components/QRScanner';
 import PINVerificationModal from '../components/PINVerificationModal';
+import XDRInspectorModal from '../components/XDRInspectorModal';
+import LedgerSignModal from '../components/LedgerSignModal';
 
 const SLIPPAGE_OPTIONS = [0.5, 1, 2];
 const DEFAULT_SLIPPAGE = 1;
@@ -35,6 +40,8 @@ export default function SendMoney() {
   const contactListRef = useRef(null);
   const [showScanner, setShowScanner] = useState(false);
   const [showPINVerification, setShowPINVerification] = useState(false);
+  const [showXDRInspector, setShowXDRInspector] = useState(false);
+  const [transactionXDR, setTransactionXDR] = useState(null);
   const [loading, setLoading] = useState(false);
   const [confirmed, setConfirmed] = useState(false);
   const [feeXLM, setFeeXLM] = useState(null);
@@ -46,6 +53,11 @@ export default function SendMoney() {
   const [memoRequired, setMemoRequired] = useState(false);
   // 'send' = strict send (sender specifies exact amount), 'receive' = strict receive (recipient gets exact amount)
   const [sendMode, setSendMode] = useState('send');
+
+  // Ledger hardware wallet state
+  const [showLedgerModal, setShowLedgerModal] = useState(false);
+  const [unsignedXDR, setUnsignedXDR] = useState(null);
+  const [ledgerNetworkPassphrase, setLedgerNetworkPassphrase] = useState(null);
 
   const isCrossAsset = form.destination_asset && form.destination_asset !== form.asset;
 
@@ -245,6 +257,47 @@ export default function SendMoney() {
     // Show PIN verification modal instead of directly submitting
     if (!confirmed) { setConfirmed(true); return; }
     setShowPINVerification(true);
+  };
+
+  const handleSignWithLedger = async () => {
+    setLoading(true);
+    try {
+      const res = await api.post('/payments/build-transaction', {
+        recipient_address: form.recipient_address,
+        amount: parseFloat(form.amount),
+        asset: form.asset,
+        memo: form.memo.trim() || undefined,
+        memo_type: form.memo_type,
+        wallet_id: selectedWallet?.id || undefined,
+      });
+      setUnsignedXDR(res.data.xdr);
+      setLedgerNetworkPassphrase(res.data.network_passphrase);
+      setShowLedgerModal(true);
+    } catch (err) {
+      toast.error(err.response?.data?.error || 'Failed to build transaction');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleLedgerSigned = async (signedXDR) => {
+    setShowLedgerModal(false);
+    setLoading(true);
+    try {
+      await api.post('/payments/submit-signed', {
+        xdr: signedXDR,
+        recipient_address: form.recipient_address,
+        amount: parseFloat(form.amount),
+        asset: form.asset,
+        wallet_id: selectedWallet?.id || undefined,
+      });
+      toast.success('Payment sent via Ledger!');
+      navigate('/dashboard');
+    } catch (err) {
+      toast.error(err.response?.data?.error || 'Failed to submit Ledger transaction');
+    } finally {
+      setLoading(false);
+    }
   };
 
   const handlePINVerified = async () => {
@@ -792,6 +845,13 @@ export default function SendMoney() {
                 </>
               ) : null}
             </div>
+            <button
+              type="button"
+              onClick={() => setShowXDRInspector(true)}
+              className="w-full mt-2 py-2 bg-gray-800 hover:bg-gray-700 text-gray-300 rounded-lg text-sm flex items-center justify-center gap-2 transition-colors"
+            >
+              <Code size={16} /> View Raw Transaction (XDR)
+            </button>
           </div>
         )}
 
@@ -818,7 +878,27 @@ export default function SendMoney() {
             {t('common.cancel')}
           </button>
         )}
+
+        {/* Ledger hardware wallet signing option — shown at confirmation step */}
+        {confirmed && !isCrossAsset && (
+          <button
+            type="button"
+            onClick={handleSignWithLedger}
+            disabled={loading}
+            className="w-full bg-gray-800 hover:bg-gray-700 border border-gray-600 text-white font-semibold py-3 rounded-xl flex items-center justify-center gap-2 transition-colors disabled:opacity-50"
+          >
+            🔐 Sign with Ledger
+          </button>
+        )}
       </form>
+
+      <LedgerSignModal
+        show={showLedgerModal}
+        onClose={() => setShowLedgerModal(false)}
+        xdr={unsignedXDR}
+        networkPassphrase={ledgerNetworkPassphrase}
+        onSigned={handleLedgerSigned}
+      />
 
       <QRScanner
         isOpen={showScanner}
@@ -832,6 +912,13 @@ export default function SendMoney() {
         onSuccess={handlePINVerified}
         amount={`${form.amount} ${form.asset}`}
         recipient={form.recipient_address}
+      />
+
+      {/* XDR Inspector Modal */}
+      <XDRInspectorModal
+        isOpen={showXDRInspector}
+        onClose={() => setShowXDRInspector(false)}
+        xdr={transactionXDR}
       />
     </div>
   );
