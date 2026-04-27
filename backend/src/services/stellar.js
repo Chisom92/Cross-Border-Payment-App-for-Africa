@@ -385,6 +385,54 @@ function isBadSeq(err) {
   return err.response?.data?.extras?.result_codes?.transaction === 'tx_bad_seq';
 }
 
+/**
+ * Issue a bumpSequence operation to resync an account whose on-chain sequence
+ * number has drifted ahead of what the local SDK has loaded.
+ *
+ * Fetches the current on-chain sequence, then submits a bumpSequence targeting
+ * that same value so the next transaction built with a freshly loaded account
+ * will use sequence + 1 and succeed.
+ */
+async function recoverSequence(publicKey, keypair) {
+  logger.warn('issuing bumpSequence for account', { publicKey });
+  const account = await withFallback(s => s.loadAccount(publicKey), 'loadAccount(bumpSeq)');
+  const tx = new StellarSdk.TransactionBuilder(account, {
+    fee: await withFallback(s => s.fetchBaseFee(), 'fetchBaseFee(bumpSeq)'),
+    networkPassphrase,
+  })
+    .addOperation(StellarSdk.Operation.bumpSequence({
+      bumpTo: account.sequenceNumber(),
+    }))
+    .setTimeout(30)
+    .build();
+  tx.sign(keypair);
+  const result = await withFallback(s => s.submitTransaction(tx), 'submitTransaction(bumpSeq)');
+  return result;
+}
+
+/**
+ * Wrap an async function `fn` with automatic bumpSequence recovery.
+ *
+ * Calls fn(). If it throws a tx_bad_seq error, issues a bumpSequence to resync
+ * the account and retries fn() once. All other errors pass through unchanged.
+ * If recoverSequence itself fails, the error is propagated with a log message.
+ */
+async function withSequenceRecovery(fn, publicKey, keypair) {
+  try {
+    return await fn();
+  } catch (err) {
+    if (!isBadSeq(err)) throw err;
+    logger.warn('tx_bad_seq detected, attempting bumpSequence recovery', { publicKey });
+    try {
+      await recoverSequence(publicKey, keypair);
+    } catch (recoveryErr) {
+      logger.error('bumpSequence recovery failed', { publicKey, error: recoveryErr.message });
+      throw recoveryErr;
+    }
+    return await fn();
+  }
+}
+
 async function sendPayment(params, logger = require('../utils/logger')) {
   return enqueue(params.senderPublicKey, () => _sendPaymentOnce(params, logger));
 }
@@ -464,6 +512,30 @@ async function _sendPaymentOnce({
 
       throw err;
     }
+  }
+
+  // All reload-and-retry attempts exhausted — escalate to bumpSequence recovery
+  if (isBadSeq(lastErr)) {
+    logger.warn('tx_bad_seq persists after MAX_SEQ_RETRIES, escalating to bumpSequence', { senderPublicKey });
+    await recoverSequence(senderPublicKey, senderKeypair);
+    // One final attempt after sequence resync
+    const senderAccount = await withFallback(s => s.loadAccount(senderPublicKey), 'loadAccount(postBump)');
+    const txBuilder = new StellarSdk.TransactionBuilder(senderAccount, {
+      fee: await feeForPriority(feePriority),
+      networkPassphrase,
+    })
+      .addOperation(StellarSdk.Operation.payment({
+        destination: recipientPublicKey,
+        asset: assetObj,
+        amount: String(amount),
+      }))
+      .setTimeout(30);
+    const memoObj = memo ? buildStellarMemo(memo, memoType) : null;
+    if (memoObj) txBuilder.addMemo(memoObj);
+    const transaction = txBuilder.build();
+    transaction.sign(senderKeypair);
+    const result = await withFallback(s => s.submitTransaction(transaction), 'submitTransaction(postBump)');
+    return { transactionHash: result.hash, ledger: result.ledger, type: 'payment' };
   }
 
   throw lastErr;
@@ -736,13 +808,6 @@ async function sendPathPayment({
 
   const secretKey = decryptPrivateKey(encryptedSecretKey);
   const senderKeypair = StellarSdk.Keypair.fromSecret(secretKey);
-  const senderAccount = await withFallback(s => s.loadAccount(senderPublicKey), logger);
-  const senderAccount = validateHorizonResponse(
-    AccountResponseSchema,
-    await withFallback(s => s.loadAccount(senderPublicKey)),
-    'loadAccount(sender)'
-  );
-  const senderAccount = await withFallback(s => s.loadAccount(senderPublicKey), 'loadAccount');
 
   const sdkPath = path.map(p =>
     p.asset_type === 'native'
@@ -750,31 +815,31 @@ async function sendPathPayment({
       : new StellarSdk.Asset(p.asset_code, p.asset_issuer)
   );
 
-  const txBuilder = new StellarSdk.TransactionBuilder(senderAccount, {
-    fee: await withFallback(s => s.fetchBaseFee(), logger),
-    fee: await withFallback(s => s.fetchBaseFee(), 'fetchBaseFee'),
-    networkPassphrase
-  })
-    .addOperation(StellarSdk.Operation.pathPaymentStrictSend({
-      sendAsset: srcAsset,
-      sendAmount: String(sourceAmount),
-      destination: recipientPublicKey,
-      destAsset: dstAsset,
-      destMin: String(destinationMinAmount),
-      path: sdkPath
-    }))
-    .setTimeout(30);
+  return withSequenceRecovery(async () => {
+    const senderAccount = await withFallback(s => s.loadAccount(senderPublicKey), 'loadAccount');
 
-  if (memo) txBuilder.addMemo(StellarSdk.Memo.text(memo.slice(0, 28)));
+    const txBuilder = new StellarSdk.TransactionBuilder(senderAccount, {
+      fee: await withFallback(s => s.fetchBaseFee(), 'fetchBaseFee'),
+      networkPassphrase,
+    })
+      .addOperation(StellarSdk.Operation.pathPaymentStrictSend({
+        sendAsset: srcAsset,
+        sendAmount: String(sourceAmount),
+        destination: recipientPublicKey,
+        destAsset: dstAsset,
+        destMin: String(destinationMinAmount),
+        path: sdkPath,
+      }))
+      .setTimeout(30);
 
-  const transaction = txBuilder.build();
-  transaction.sign(senderKeypair);
+    if (memo) txBuilder.addMemo(StellarSdk.Memo.text(memo.slice(0, 28)));
 
-  const result = await withFallback(s => s.submitTransaction(transaction), logger);
-  const rawResult = await withFallback(s => s.submitTransaction(transaction));
-  const result = validateHorizonResponse(TransactionSubmitResponseSchema, rawResult, 'submitTransaction(pathPayment)');
-  const result = await withFallback(s => s.submitTransaction(transaction), 'submitTransaction');
-  return { transactionHash: result.hash, ledger: result.ledger };
+    const transaction = txBuilder.build();
+    transaction.sign(senderKeypair);
+
+    const result = await withFallback(s => s.submitTransaction(transaction), 'submitTransaction');
+    return { transactionHash: result.hash, ledger: result.ledger };
+  }, senderPublicKey, senderKeypair);
 }
 
 /**
@@ -845,29 +910,32 @@ async function addTrustline({ publicKey, encryptedSecretKey, asset, limit }) {
   const assetObj = resolveAsset(asset);
   const secretKey = decryptPrivateKey(encryptedSecretKey);
   const keypair = StellarSdk.Keypair.fromSecret(secretKey);
-  const account = validateHorizonResponse(
-    AccountResponseSchema,
-    await withRetry(() => server.loadAccount(publicKey), { label: 'loadAccount(trustline)' }),
-    'loadAccount(trustline)'
-  );
 
-  const op = StellarSdk.Operation.changeTrust({
-    asset: assetObj,
-    ...(limit !== undefined ? { limit: String(limit) } : {}),
-  });
+  return withSequenceRecovery(async () => {
+    const account = validateHorizonResponse(
+      AccountResponseSchema,
+      await withRetry(() => server.loadAccount(publicKey), { label: 'loadAccount(trustline)' }),
+      'loadAccount(trustline)'
+    );
 
-  const tx = new StellarSdk.TransactionBuilder(account, {
-    fee: await withRetry(() => server.fetchBaseFee(), { label: 'fetchBaseFee' }),
-    networkPassphrase,
-  })
-    .addOperation(op)
-    .setTimeout(30)
-    .build();
+    const op = StellarSdk.Operation.changeTrust({
+      asset: assetObj,
+      ...(limit !== undefined ? { limit: String(limit) } : {}),
+    });
 
-  tx.sign(keypair);
-  const rawResult = await withRetry(() => server.submitTransaction(tx), { label: 'submitTransaction(addTrustline)' });
-  const result = validateHorizonResponse(TransactionSubmitResponseSchema, rawResult, 'submitTransaction(addTrustline)');
-  return { transactionHash: result.hash };
+    const tx = new StellarSdk.TransactionBuilder(account, {
+      fee: await withRetry(() => server.fetchBaseFee(), { label: 'fetchBaseFee' }),
+      networkPassphrase,
+    })
+      .addOperation(op)
+      .setTimeout(30)
+      .build();
+
+    tx.sign(keypair);
+    const rawResult = await withRetry(() => server.submitTransaction(tx), { label: 'submitTransaction(addTrustline)' });
+    const result = validateHorizonResponse(TransactionSubmitResponseSchema, rawResult, 'submitTransaction(addTrustline)');
+    return { transactionHash: result.hash };
+  }, publicKey, keypair);
 }
 
 /**
@@ -1311,5 +1379,11 @@ module.exports = {
   setAccountFlags,
   findReceivePath,
   sendStrictReceivePathPayment,
+<<<<<<< feat/bump-sequence-recovery
+  isBadSeq,
+  recoverSequence,
+  withSequenceRecovery,
+=======
   validateNetworkPassphrase,
+>>>>>>> main
 };
