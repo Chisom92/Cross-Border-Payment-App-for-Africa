@@ -1,4 +1,10 @@
 const db = require('../db');
+const { getStellarStats } = require('../services/stellar');
+
+// Cache for Stellar stats (10 seconds)
+let stellarStatsCache = null;
+let stellarStatsCacheTime = 0;
+const CACHE_DURATION = 10000; // 10 seconds
 const { clawbackAsset } = require('../services/stellar');
 const audit = require('../services/audit');
 
@@ -89,6 +95,25 @@ async function getTransactions(req, res, next) {
   }
 }
 
+module.exports = { getStats, getUsers, getTransactions, getStellarNetworkStats };
+
+async function getStellarNetworkStats(req, res, next) {
+  try {
+    const now = Date.now();
+    
+    // Return cached data if still valid
+    if (stellarStatsCache && (now - stellarStatsCacheTime) < CACHE_DURATION) {
+      return res.json(stellarStatsCache);
+    }
+
+    // Fetch fresh data
+    const stats = await getStellarStats();
+    
+    // Update cache
+    stellarStatsCache = stats;
+    stellarStatsCacheTime = now;
+
+    res.json(stats);
 module.exports = { getStats, getUsers, getTransactions, clawback };
 
 /**
