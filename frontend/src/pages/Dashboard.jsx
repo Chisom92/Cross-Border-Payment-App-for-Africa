@@ -22,6 +22,25 @@ export default function Dashboard() {
   const navigate = useNavigate();
   const { t } = useTranslation();
 
+  // Admin Contract State Viewer
+  const [adminContractId, setAdminContractId] = useState('');
+  const [adminKeyPrefix, setAdminKeyPrefix] = useState('');
+  const [adminContractState, setAdminContractState] = useState(null);
+  const [adminStateLoading, setAdminStateLoading] = useState(false);
+
+  const fetchContractState = async () => {
+    if (!adminContractId) return;
+    setAdminStateLoading(true);
+    try {
+      const res = await api.get(`/contracts/${adminContractId}/state`, { params: { prefix: adminKeyPrefix } });
+      setAdminContractState(res.data.data || []);
+    } catch (err) {
+      toast.error(err.response?.data?.error || 'Failed to fetch contract state');
+    } finally {
+      setAdminStateLoading(false);
+    }
+  };
+
   // Multi-wallet state
   const [wallets, setWallets] = useState([]);
   const [activeWalletId, setActiveWalletId] = useState(null);
@@ -56,7 +75,7 @@ export default function Dashboard() {
         ]).then(([walletsRes, txRes]) => {
           setWallets(walletsRes.data.wallets);
           setTransactions(txRes.data.transactions.slice(0, 5));
-        }).catch(() => {});
+        }).catch(() => { });
       }
     },
     [wallet?.public_key],
@@ -291,11 +310,10 @@ export default function Dashboard() {
                     setActiveWalletId(w.id);
                     setShowWalletDropdown(false);
                   }}
-                  className={`w-full flex items-center justify-between px-4 py-3 text-left transition-colors ${
-                    w.id === activeWalletId
+                  className={`w-full flex items-center justify-between px-4 py-3 text-left transition-colors ${w.id === activeWalletId
                       ? 'bg-primary-500/20 text-primary-400'
                       : 'hover:bg-gray-700 text-white'
-                  }`}
+                    }`}
                 >
                   <div>
                     <p className="font-medium text-sm">{w.label}</p>
@@ -362,9 +380,8 @@ export default function Dashboard() {
 
       {/* Balance Card */}
       <div
-        className={`bg-gradient-to-br from-primary-600 to-primary-700 rounded-2xl p-5 shadow-lg shadow-primary-500/20 transition-all duration-500 ${
-          balanceIncreased ? 'ring-4 ring-green-400 ring-opacity-50' : ''
-        }`}
+        className={`bg-gradient-to-br from-primary-600 to-primary-700 rounded-2xl p-5 shadow-lg shadow-primary-500/20 transition-all duration-500 ${balanceIncreased ? 'ring-4 ring-green-400 ring-opacity-50' : ''
+          }`}
       >
         <div className="flex items-center justify-between mb-1">
           <p className="text-primary-100 text-sm">{t('dashboard.total_balance')}</p>
@@ -393,11 +410,10 @@ export default function Dashboard() {
             <button
               key={c.code}
               onClick={() => setSelectedCurrency(c.code)}
-              className={`text-xs px-2.5 py-1 rounded-full transition-colors ${
-                selectedCurrency === c.code
+              className={`text-xs px-2.5 py-1 rounded-full transition-colors ${selectedCurrency === c.code
                   ? 'bg-white text-primary-700 font-semibold'
                   : 'bg-primary-500/40 text-primary-100 hover:bg-primary-500/60'
-              }`}
+                }`}
             >
               {c.flag} {c.code}
             </button>
@@ -436,9 +452,8 @@ export default function Dashboard() {
                 <button
                   key={w.id}
                   onClick={() => setActiveWalletId(w.id)}
-                  className={`w-full flex items-center justify-between rounded-lg px-3 py-2 transition-colors ${
-                    isActive ? 'bg-primary-500/10 border border-primary-500/30' : 'hover:bg-gray-800'
-                  }`}
+                  className={`w-full flex items-center justify-between rounded-lg px-3 py-2 transition-colors ${isActive ? 'bg-primary-500/10 border border-primary-500/30' : 'hover:bg-gray-800'
+                    }`}
                 >
                   <div className="flex items-center gap-2">
                     <Wallet size={14} className={isActive ? 'text-primary-400' : 'text-gray-500'} />
@@ -504,6 +519,42 @@ export default function Dashboard() {
         </button>
       </div>
 
+      {/* Admin Dashboard: Contract State Viewer */}
+      {user?.role === 'admin' && (
+        <div className="bg-gray-900 border border-gray-800 rounded-xl p-4">
+          <h3 className="text-sm font-semibold text-primary-400 mb-3">Admin: Contract State Viewer</h3>
+          <div className="flex gap-2 flex-wrap mb-3">
+            <input
+              type="text"
+              placeholder="Contract ID (C...)"
+              value={adminContractId}
+              onChange={e => setAdminContractId(e.target.value)}
+              className="flex-1 bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-white text-sm placeholder-gray-500 focus:outline-none focus:border-primary-500 transition-colors"
+            />
+            <input
+              type="text"
+              placeholder="Key Prefix (optional)"
+              value={adminKeyPrefix}
+              onChange={e => setAdminKeyPrefix(e.target.value)}
+              className="w-32 bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-white text-sm placeholder-gray-500 focus:outline-none focus:border-primary-500 transition-colors"
+            />
+            <button
+              type="button"
+              onClick={fetchContractState}
+              disabled={adminStateLoading || !adminContractId}
+              className="bg-primary-500 hover:bg-primary-600 disabled:opacity-50 text-white text-sm font-semibold px-4 py-2 rounded-lg transition-colors"
+            >
+              {adminStateLoading ? 'Loading...' : 'View State'}
+            </button>
+          </div>
+          {adminContractState && (
+            <div className="bg-gray-800 p-3 rounded-lg overflow-x-auto text-xs font-mono text-gray-300">
+              {JSON.stringify(adminContractState, null, 2)}
+            </div>
+          )}
+        </div>
+      )}
+
       {/* Recent transactions */}
       <div>
         <div className="flex items-center justify-between mb-3">
@@ -525,11 +576,10 @@ export default function Dashboard() {
                 className="bg-white dark:bg-gray-900 border border-gray-100 dark:border-gray-800 rounded-xl p-3 flex items-center gap-3 shadow-sm"
               >
                 <div
-                  className={`w-9 h-9 rounded-full flex items-center justify-center shrink-0 ${
-                    tx.direction === 'sent'
+                  className={`w-9 h-9 rounded-full flex items-center justify-center shrink-0 ${tx.direction === 'sent'
                       ? 'bg-red-500/10 text-red-400'
                       : 'bg-primary-500/10 text-primary-400'
-                  }`}
+                    }`}
                 >
                   {tx.direction === 'sent' ? <Send size={16} /> : <Download size={16} />}
                 </div>
@@ -542,9 +592,8 @@ export default function Dashboard() {
                   <p className="text-xs text-gray-500">{new Date(tx.created_at).toLocaleDateString()}</p>
                 </div>
                 <span
-                  className={`text-sm font-semibold shrink-0 ${
-                    tx.direction === 'sent' ? 'text-red-400' : 'text-primary-400'
-                  }`}
+                  className={`text-sm font-semibold shrink-0 ${tx.direction === 'sent' ? 'text-red-400' : 'text-primary-400'
+                    }`}
                 >
                   {tx.direction === 'sent' ? '-' : '+'}
                   {tx.amount} {tx.asset}

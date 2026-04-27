@@ -20,8 +20,8 @@ const FRAUD_RULES = {
 async function checkVelocity(walletAddress) {
   const result = await db.query(
     `SELECT COUNT(*) FROM transactions
-     WHERE sender_wallet = $1 AND created_at > NOW() - INTERVAL '${FRAUD_RULES.VELOCITY_TRANSACTIONS.window} minutes'`,
-    [walletAddress]
+       WHERE sender_wallet = $1 AND created_at > NOW() - ($2 * INTERVAL '1 minute')`,
+    [walletAddress, FRAUD_RULES.VELOCITY_TRANSACTIONS.window]
   );
   const count = parseInt(result.rows[0].count);
   if (count >= FRAUD_RULES.VELOCITY_TRANSACTIONS.limit) {
@@ -36,7 +36,7 @@ async function checkLargeTransaction(walletAddress, amount, asset) {
      WHERE sender_wallet = $1 AND asset = $2 AND created_at > NOW() - INTERVAL '30 days'`,
     [walletAddress, asset]
   );
-  
+
   const avgAmount = parseFloat(result.rows[0]?.avg_amount || 0);
   if (avgAmount > 0 && amount > avgAmount * FRAUD_RULES.LARGE_TRANSACTION.multiplier) {
     return { blocked: true, reason: `Transaction exceeds ${FRAUD_RULES.LARGE_TRANSACTION.multiplier}x average (${avgAmount} ${asset})` };
@@ -47,8 +47,8 @@ async function checkLargeTransaction(walletAddress, amount, asset) {
 async function checkUniqueRecipients(walletAddress) {
   const result = await db.query(
     `SELECT COUNT(DISTINCT recipient_wallet) FROM transactions
-     WHERE sender_wallet = $1 AND created_at > NOW() - INTERVAL '${FRAUD_RULES.UNIQUE_RECIPIENTS.window} minutes'`,
-    [walletAddress]
+       WHERE sender_wallet = $1 AND created_at > NOW() - ($2 * INTERVAL '1 minute')`,
+    [walletAddress, FRAUD_RULES.UNIQUE_RECIPIENTS.window]
   );
   const count = parseInt(result.rows[0].count);
   if (count >= FRAUD_RULES.UNIQUE_RECIPIENTS.limit) {
