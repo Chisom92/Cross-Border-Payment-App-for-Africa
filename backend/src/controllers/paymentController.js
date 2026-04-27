@@ -15,6 +15,7 @@ const {
 } = require("../services/stellar");
 const webhook = require("../services/webhook");
 const cache = require("../utils/cache");
+const { checkVelocity, checkDailyLimit } = require("../services/fraudDetection");
 const { checkFraud, logFraudBlock } = require("../services/fraudDetection");
 const { parseHistoryFrom, parseHistoryTo, normalizeAsset, validateDateRange } = require("../utils/historyQuery");
 const { isMemoRequired } = require("../services/memoRequired");
@@ -225,6 +226,16 @@ async function send(req, res, next) {
       });
     }
 
+    // Fraud protection — velocity and daily limit (single authoritative check)
+    const [isSuspicious, limitExceeded] = await Promise.all([
+      checkVelocity(public_key),
+      checkDailyLimit(public_key, amount, asset),
+    ]);
+    if (isSuspicious) {
+      return res
+        .status(429)
+        .json({ error: "Transaction limit reached. Please wait before sending again." });
+    // Fraud protection
     const fraudCheck = await checkFraud(public_key, amount, asset);
     if (fraudCheck.blocked) {
       await logFraudBlock(public_key, fraudCheck.reason, amount, asset);
@@ -236,6 +247,11 @@ async function send(req, res, next) {
         error: "This address requires a memo to route your payment correctly. Please include a memo.",
         code: "MEMO_REQUIRED",
       });
+    }
+    if (limitExceeded) {
+      return res
+        .status(429)
+        .json({ error: "Daily send limit reached. Try again later.", code: "DAILY_LIMIT_EXCEEDED" });
     }
 
     const { transactionHash, ledger, type, claimableBalanceId } = await sendPayment({
@@ -251,6 +267,12 @@ async function send(req, res, next) {
 
     const ledger_close_time = await fetchLedgerCloseTime(ledger);
 
+    // Save to DB
+    const feeAmount = calculateFee(amount);
+    await db.query(
+      `INSERT INTO transactions (id, sender_wallet, recipient_wallet, amount, asset, memo, tx_hash, status, fee_amount)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,'completed',$8)`,
+      [txId, public_key, recipient_address, amount, asset, memo || null, transactionHash, feeAmount],
     const txStatus = type === "claimable_balance" ? "pending_claim" : "confirming";
     await db.query(
       `INSERT INTO transactions (id, sender_wallet, recipient_wallet, amount, asset, memo, memo_type, tx_hash, status, claimable_balance_id, request_id, is_encrypted, encrypted_memo, ledger_close_time)
@@ -498,7 +520,17 @@ async function history(req, res, next) {
 
     const { public_key } = walletResult.rows[0];
 
-    const conditions = ["(sender_wallet = $1 OR recipient_wallet = $1)"];
+    const direction = req.query.direction || "all";
+    let directionCondition;
+    if (direction === "sent") {
+      directionCondition = "sender_wallet = $1";
+    } else if (direction === "received") {
+      directionCondition = "recipient_wallet = $1";
+    } else {
+      directionCondition = "(sender_wallet = $1 OR recipient_wallet = $1)";
+    }
+
+    const conditions = [directionCondition];
     const baseParams = [public_key];
 
     if (cursor) {
@@ -620,6 +652,9 @@ async function sendPath(req, res, next) {
     );
 
     pollTransactionConfirmation(txId, transactionHash).catch(() => {});
+
+    // Invalidate sender's cached balance after successful path payment
+    await cache.del(`balance:${public_key}`);
 
     const txData = { id: txId, tx_hash: transactionHash, ledger, source_amount, source_asset, destination_asset, sender: public_key, recipient: recipient_address };
     webhook.deliver("payment.sent", txData).catch(() => {});
@@ -811,7 +846,18 @@ async function exportCSV(req, res, next) {
     }));
 
     res.setHeader("Content-Type", "text/csv");
-    res.setHeader("Content-Disposition", 'attachment; filename="transactions.csv"');
+    // Build dynamic filename based on date range params; sanitize to prevent header injection
+    const sanitize = (s) => s.replace(/[^0-9a-zA-Z_\-]/g, "");
+    let filename;
+    if (req.query.from || req.query.to) {
+      const from = sanitize((req.query.from || "").slice(0, 10));
+      const to = sanitize((req.query.to || "").slice(0, 10));
+      filename = `transactions_${from}_to_${to}.csv`;
+    } else {
+      const today = new Date().toISOString().slice(0, 10);
+      filename = `transactions_exported_${today}.csv`;
+    }
+    res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
 
     const output = stringify(rows, {
       header: true,

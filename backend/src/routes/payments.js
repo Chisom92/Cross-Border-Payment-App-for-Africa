@@ -85,9 +85,97 @@ router.get(
   },
 );
 
-// Issue #244: historyQueryValidators enforces 366-day max range and cross-field
-// from<=to validation at the validator layer before the controller runs.
-router.get("/history", historyQueryValidators, validate, history);
+router.post(
+  '/send',
+  paymentSendValidators,
+router.post('/send',
+  [
+    body('recipient_address')
+      .notEmpty().withMessage('Recipient address is required')
+      .custom((value) => {
+        if (!value.includes('*') && !StellarSdk.StrKey.isValidEd25519PublicKey(value)) {
+          throw new Error('Invalid Stellar wallet address or federation address');
+        }
+        return true;
+      }),
+    amountLimits('amount'),
+    body('asset').optional().isIn(['XLM', 'USDC', 'NGN', 'GHS', 'KES']),
+  ],
+  validate,
+  idempotency,
+  send,
+);
+
+/**
+ * @swagger
+ * /api/payments/history:
+ *   get:
+ *     summary: Get transaction history
+ *     tags: [Payments]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: query
+ *         name: direction
+ *         schema:
+ *           type: string
+ *           enum: [sent, received, all]
+ *           default: all
+ *         description: Filter by transaction direction. Translated to a SQL WHERE clause on sender_wallet or recipient_wallet.
+ *       - in: query
+ *         name: from
+ *         schema:
+ *           type: string
+ *           format: date
+ *         description: Start date (ISO 8601)
+ *       - in: query
+ *         name: to
+ *         schema:
+ *           type: string
+ *           format: date
+ *         description: End date (ISO 8601)
+ *       - in: query
+ *         name: asset
+ *         schema:
+ *           type: string
+ *           enum: [XLM, USDC, NGN, GHS, KES]
+ *       - in: query
+ *         name: limit
+ *         schema:
+ *           type: integer
+ *           minimum: 1
+ *           maximum: 100
+ *           default: 20
+ *       - in: query
+ *         name: cursor
+ *         schema:
+ *           type: integer
+ *         description: Pagination cursor (last transaction id)
+ *     responses:
+ *       200:
+ *         description: List of transactions
+ *       400:
+ *         description: Invalid query parameters
+ */
+router.get(
+  "/history",
+  [
+    query("limit").optional().isInt({ min: 1, max: 100 }).withMessage("limit must be between 1 and 100"),
+    query("from").optional({ values: "falsy" }).trim().isISO8601().withMessage("from must be a valid ISO 8601 date"),
+    query("to").optional({ values: "falsy" }).trim().isISO8601().withMessage("to must be a valid ISO 8601 date"),
+    query("asset")
+      .optional({ values: "falsy" })
+      .trim()
+      .isIn(ALLOWED_HISTORY_ASSETS)
+      .withMessage(`asset must be one of: ${ALLOWED_HISTORY_ASSETS.join(", ")}`),
+    query("direction")
+      .optional({ values: "falsy" })
+      .isIn(["sent", "received", "all"])
+      .withMessage("direction must be sent, received, or all"),
+  ],
+  validate,
+  history,
+);
 
 router.get("/export", exportCSV);
 
