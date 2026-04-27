@@ -6,6 +6,7 @@ const db = require('../db');
 const { createWallet } = require('../services/stellar');
 const { hashPIN, comparePIN, validatePIN } = require('../services/pin');
 const { sendVerificationEmail } = require('../services/email');
+const logger = require('../utils/logger');
 const {
   COOKIE_NAME,
   COOKIE_OPTIONS,
@@ -85,13 +86,14 @@ async function login(req, res, next) {
     // Issue short-lived access token
     const token = signAccessToken({ userId: user.id, email: user.email, role: user.role });
 
-    // Issue refresh token — store only the hash in DB
+    // Issue refresh token — store only the hash in DB, seed a new family
     const { raw, hash } = generateRefreshToken();
     const expiresAt = refreshTokenExpiresAt();
+    const familyId = uuidv4();
     await db.query(
-      `INSERT INTO refresh_tokens (id, user_id, token_hash, expires_at)
-       VALUES ($1, $2, $3, $4)`,
-      [uuidv4(), user.id, hash, expiresAt]
+      `INSERT INTO refresh_tokens (id, user_id, token_hash, expires_at, family_id, revoked)
+       VALUES ($1, $2, $3, $4, $5, FALSE)`,
+      [uuidv4(), user.id, hash, expiresAt, familyId]
     );
 
     // Set refresh token as HttpOnly cookie
@@ -224,9 +226,9 @@ async function refresh(req, res, next) {
 
     const hash = crypto.createHash('sha256').update(raw).digest('hex');
 
-    // Look up the token — must exist and not be expired
+    // Look up the token — active (not revoked) and not expired
     const result = await db.query(
-      `SELECT rt.id, rt.user_id, rt.expires_at,
+      `SELECT rt.id, rt.user_id, rt.expires_at, rt.family_id, rt.revoked,
               u.email, u.role
        FROM refresh_tokens rt
        JOIN users u ON u.id = rt.user_id
@@ -235,23 +237,71 @@ async function refresh(req, res, next) {
     );
 
     const record = result.rows[0];
-    if (!record) return res.status(401).json({ error: 'Invalid refresh token' });
+
+    if (!record) {
+      // Token hash unknown — could be a completely invalid token (ignore)
+      // or a previously-rotated token being replayed (reuse attack).
+      // Check if this hash belongs to a revoked token in any known family.
+      const revokedResult = await db.query(
+        `SELECT rt.family_id, rt.user_id
+         FROM refresh_tokens rt
+         WHERE rt.token_hash = $1 AND rt.revoked = TRUE`,
+        [hash]
+      );
+
+      if (revokedResult.rows.length > 0) {
+        // Reuse detected — invalidate the entire family and force re-login
+        const { family_id, user_id } = revokedResult.rows[0];
+        await db.query(
+          'DELETE FROM refresh_tokens WHERE family_id = $1',
+          [family_id]
+        );
+        logger.warn('refresh_token_reuse detected — family invalidated', {
+          event: 'refresh_token_reuse',
+          family_id,
+          user_id,
+        });
+        res.clearCookie(COOKIE_NAME, { ...COOKIE_OPTIONS, maxAge: undefined });
+        return res.status(401).json({ error: 'Refresh token reuse detected. Please log in again.' });
+      }
+
+      return res.status(401).json({ error: 'Invalid refresh token' });
+    }
+
+    if (record.revoked) {
+      // Active lookup returned a revoked row — same family attack, nuke family
+      await db.query(
+        'DELETE FROM refresh_tokens WHERE family_id = $1',
+        [record.family_id]
+      );
+      logger.warn('refresh_token_reuse detected — family invalidated', {
+        event: 'refresh_token_reuse',
+        family_id: record.family_id,
+        user_id: record.user_id,
+      });
+      res.clearCookie(COOKIE_NAME, { ...COOKIE_OPTIONS, maxAge: undefined });
+      return res.status(401).json({ error: 'Refresh token reuse detected. Please log in again.' });
+    }
+
     if (new Date(record.expires_at) < new Date()) {
-      // Clean up expired token
+      // Expired — clean up this token only (family may have other valid tokens)
       await db.query('DELETE FROM refresh_tokens WHERE id = $1', [record.id]);
       res.clearCookie(COOKIE_NAME, { ...COOKIE_OPTIONS, maxAge: undefined });
       return res.status(401).json({ error: 'Refresh token expired' });
     }
 
-    // Rotate: delete old token, issue new one
+    // Valid — rotate: mark old token revoked (kept for reuse detection), issue new one
     const { raw: newRaw, hash: newHash } = generateRefreshToken();
     const expiresAt = refreshTokenExpiresAt();
 
-    await db.query('DELETE FROM refresh_tokens WHERE id = $1', [record.id]);
     await db.query(
-      `INSERT INTO refresh_tokens (id, user_id, token_hash, expires_at)
-       VALUES ($1, $2, $3, $4)`,
-      [uuidv4(), record.user_id, newHash, expiresAt]
+      'UPDATE refresh_tokens SET revoked = TRUE WHERE id = $1',
+      [record.id]
+    );
+    await db.query(
+      `INSERT INTO refresh_tokens (id, user_id, token_hash, expires_at, family_id, revoked)
+       VALUES ($1, $2, $3, $4, $5, FALSE)`,
+      [uuidv4(), record.user_id, newHash, expiresAt, record.family_id]
     );
 
     const token = signAccessToken({ userId: record.user_id, email: record.email, role: record.role });
