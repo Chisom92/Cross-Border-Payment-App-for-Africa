@@ -825,6 +825,9 @@ async function sendPath(req, res, next) {
     // Start async confirmation polling (non-blocking)
     pollTransactionConfirmation(txId, transactionHash).catch(() => {});
 
+    // Invalidate sender's cached balance after successful path payment
+    await cache.del(`balance:${public_key}`);
+
     const txData = { id: txId, tx_hash: transactionHash, ledger, source_amount, source_asset, destination_asset, sender: public_key, recipient: recipient_address };
     webhook.deliver("payment.sent", txData).catch(() => {});
     webhook.deliver("payment.received", txData).catch(() => {});
