@@ -168,9 +168,14 @@ async function getQRCode(req, res, next) {
 
 // ---------------------------------------------------------------------------
 // GET /wallet/transactions  (optionally ?wallet_id=<uuid>)
+// DEPRECATED — use GET /api/payments/history instead
 // ---------------------------------------------------------------------------
 async function getWalletTransactions(req, res, next) {
   try {
+    res.set('Deprecation', 'true');
+    res.set('Link', '</api/payments/history>; rel="successor-version"');
+    res.set('Sunset', 'Sat, 01 Jan 2026 00:00:00 GMT');
+
     const wallet = await resolveWallet(req.user.userId, req.query.wallet_id || null);
     if (!wallet) return res.status(404).json({ error: 'Wallet not found' });
 
