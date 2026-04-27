@@ -20,6 +20,21 @@ function isSet(value) {
  * Never logs secret values — only variable names.
  */
 function validateEnv() {
+  const checkPositiveInt = (varName) => {
+    if (process.env[varName]) {
+      const val = Number(process.env[varName]);
+      if (!Number.isInteger(val) || val <= 0) {
+        console.error(
+          `\\x1b[31m[CONFIG ERROR] ${varName} must be a positive integer.\\x1b[0m`
+        );
+        process.exit(1);
+      }
+    }
+  };
+
+  checkPositiveInt('FRAUD_VELOCITY_WINDOW');
+  checkPositiveInt('FRAUD_UNIQUE_RECIPIENTS_WINDOW');
+
   const missing = REQUIRED_STRING_VARS.filter((name) => !isSet(process.env[name]));
 
   if (missing.length > 0) {
@@ -47,6 +62,10 @@ function validateEnv() {
   if (expectedHorizon && horizonUrl !== expectedHorizon) {
     console.error(
       `\x1b[31m[CONFIG ERROR] STELLAR_HORIZON_URL does not match STELLAR_NETWORK="${network}". Expected "${expectedHorizon}".\x1b[0m`
+    );
+    console.error(
+      `\x1b[31m[CONFIG ERROR] Network passphrase mismatch risk: a ${network === 'mainnet' ? 'testnet' : 'mainnet'}-signed ` +
+      `transaction submitted to ${network} Horizon will be rejected or cause fund loss.\x1b[0m`
     );
     process.exit(1);
     return;
