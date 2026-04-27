@@ -1114,7 +1114,18 @@ async function exportCSV(req, res, next) {
     }));
 
     res.setHeader("Content-Type", "text/csv");
-    res.setHeader("Content-Disposition", 'attachment; filename="transactions.csv"');
+    // Build dynamic filename based on date range params; sanitize to prevent header injection
+    const sanitize = (s) => s.replace(/[^0-9a-zA-Z_\-]/g, "");
+    let filename;
+    if (req.query.from || req.query.to) {
+      const from = sanitize((req.query.from || "").slice(0, 10));
+      const to = sanitize((req.query.to || "").slice(0, 10));
+      filename = `transactions_${from}_to_${to}.csv`;
+    } else {
+      const today = new Date().toISOString().slice(0, 10);
+      filename = `transactions_exported_${today}.csv`;
+    }
+    res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
 
     const output = stringify(rows, {
       header: true,
